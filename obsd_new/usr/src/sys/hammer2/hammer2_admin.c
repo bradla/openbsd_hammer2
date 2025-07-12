@@ -417,6 +417,9 @@ hammer2_xop_retire(hammer2_xop_head_t *xop, uint32_t mask)
 				hammer2_chain_drop(chain);
 		}
 	}
+	/*
+    * Drop and unhold chains in xop cluster
+    */
 
 	for (i = 0; i < xop->cluster.nchains; ++i) {
 		xop->cluster.array[i].flags = 0;

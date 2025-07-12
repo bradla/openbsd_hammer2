@@ -304,6 +304,37 @@ hammer2_update_time(uint64_t *timep)
 	*timep = (uint64_t)gettime();
 }
 
+void
+hammer2_adjreadcounter(int btype, size_t bytes)
+{
+	long *counterp;
+
+	switch(btype) {
+	case HAMMER2_BREF_TYPE_DATA:
+		counterp = &hammer2_iod_file_read;
+		break;
+	case HAMMER2_BREF_TYPE_DIRENT:
+	case HAMMER2_BREF_TYPE_INODE:
+		counterp = &hammer2_iod_meta_read;
+		break;
+	case HAMMER2_BREF_TYPE_INDIRECT:
+		counterp = &hammer2_iod_indr_read;
+		break;
+	case HAMMER2_BREF_TYPE_FREEMAP_NODE:
+	case HAMMER2_BREF_TYPE_FREEMAP_LEAF:
+		counterp = &hammer2_iod_fmap_read;
+		break;
+	case HAMMER2_BREF_TYPE_FREEMAP:
+	case HAMMER2_BREF_TYPE_VOLUME:
+		counterp = &hammer2_iod_volu_read;
+		break;
+	case HAMMER2_BREF_TYPE_EMPTY:
+	default:
+		return;
+	}
+	*counterp += bytes;
+}
+
 /*
  * Increment iostat, usually without any lock taken.
  */

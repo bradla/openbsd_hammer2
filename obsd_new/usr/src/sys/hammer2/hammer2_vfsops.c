@@ -40,6 +40,9 @@
 
 #include <sys/sysctl.h>
 #include <sys/specdev.h>
+#include <sys/param.h>
+#include <sys/lock.h>
+#include <sys/vnode.h>
 
 static int hammer2_unmount(struct mount *, int, struct proc *);
 static int hammer2_recovery(hammer2_dev_t *);
@@ -51,6 +54,7 @@ static void hammer2_update_pmps(hammer2_dev_t *);
 static void hammer2_mount_helper(struct mount *, hammer2_pfs_t *);
 static void hammer2_unmount_helper(struct mount *, hammer2_pfs_t *,
     hammer2_dev_t *);
+//static int hammer2_vfs_modifying(struct mount *);
 
 struct pool hammer2_pool_inode;
 struct pool hammer2_pool_xops;
@@ -77,7 +81,7 @@ int hammer2_dio_limit = 256;
 int hammer2_bulkfree_tps = 5000;
 int hammer2_limit_scan_depth;
 int hammer2_limit_saved_chains;
-int hammer2_always_compress;
+int hammer2_always_compress = 0;
 
 /* not sysctl */
 int malloc_leak_m_hammer2;
@@ -85,6 +89,23 @@ int malloc_leak_m_hammer2_rbuf;
 int malloc_leak_m_hammer2_wbuf;
 int malloc_leak_m_hammer2_lz4;
 int malloc_leak_m_temp;
+
+//long hammer2_limit_saved_chains;
+long hammer2_limit_dirty_chains;
+long hammer2_limit_dirty_inodes;
+long hammer2_iod_file_read;
+long hammer2_iod_meta_read;
+long hammer2_iod_indr_read;
+long hammer2_iod_fmap_read;
+long hammer2_iod_volu_read;
+long hammer2_iod_file_write;
+long hammer2_iod_file_wembed;
+long hammer2_iod_file_wzero;
+long hammer2_iod_file_wdedup;
+long hammer2_iod_meta_write;
+long hammer2_iod_indr_write;
+long hammer2_iod_fmap_write;
+long hammer2_iod_volu_write;
 
 static const struct sysctl_bounded_args hammer2_vars[] = {
 	{ HAMMER2CTL_SUPPORTED_VERSION, &hammer2_supported_version, SYSCTL_INT_READONLY, },
@@ -909,7 +930,9 @@ next_hmp:
 		    strcmp(label, (char *)chain->data->ipdata.filename) == 0)
 			break;
 		chain = hammer2_chain_next(&parent, chain, &key_next,
-		    lhc + HAMMER2_DIRHASH_LOMASK, &error, 0);
+					    key_next,
+					    lhc + HAMMER2_DIRHASH_LOMASK,
+					    &error, 0);
 	}
 	if (parent) {
 		hammer2_chain_unlock(parent);
@@ -1068,7 +1091,8 @@ hammer2_update_pmps(hammer2_dev_t *hmp)
 			hammer2_pfsalloc(chain, ripdata, force_local);
 		}
 		chain = hammer2_chain_next(&parent, chain, &key_next,
-		    HAMMER2_KEY_MAX, &error, 0);
+					   key_next, HAMMER2_KEY_MAX,
+					   &error, 0);
 	}
 	if (parent) {
 		hammer2_chain_unlock(parent);
@@ -1209,6 +1233,12 @@ again:
 		hprintf("%d PFS mounts still exist\n", hmp->mount_count);
 		return;
 	}
+
+		/*
+	 * Decomission the network before we start messing with the
+	 * device and PFS.
+	 */
+	hammer2_iocom_uninit(hmp);
 
 	hammer2_bulkfree_uninit(hmp);
 	hammer2_pfsfree_scan(hmp, 0);
@@ -1556,7 +1586,8 @@ hammer2_fixup_pfses(hammer2_dev_t *hmp)
 			hammer2_trans_done(hmp->spmp, 0);
 		}
 		chain = hammer2_chain_next(&parent, chain, &key_next,
-		    HAMMER2_KEY_MAX, &error, 0);
+					   key_next, HAMMER2_KEY_MAX,
+					   &error, 0);
 	}
 
 	if (parent) {
@@ -1931,6 +1962,148 @@ restart:
 	return (error);
 }
 
+/*
+ * Initiate an asynchronous filesystem sync and, with hysteresis,
+ * stall if the internal data structure count becomes too bloated. vfs_allocate_syncvnode
+ */
+void
+hammer2_pfs_memory_wait(hammer2_pfs_t *pmp)
+{
+	uint32_t waiting;
+	int pcatch=0;
+	int error;
+	int started;
+
+	if (pmp == NULL || pmp->mp == NULL)
+		return;
+
+	started = 0;
+
+	for (;;) {
+		waiting = pmp->inmem_dirty_chains & HAMMER2_DIRTYCHAIN_MASK;
+		cpu_ccfence();
+
+		/*
+		 * Start the syncer running at 1/2 the limit to try
+		 * to avoid sleeping.
+		 */
+		if (waiting > hammer2_limit_dirty_chains / 2 ||
+		    pmp->sideq_count > hammer2_limit_dirty_inodes / 2)
+		{
+			vfs_allocate_syncvnode(pmp->mp); //trigger_syncer(pmp->mp);
+		}
+
+		/*
+		 * Stall at the limit waiting for the counts to drop.
+		 * This code will typically be woken up once the count
+		 * drops below 3/4 the limit, or in one second.
+		 */
+		if (waiting < hammer2_limit_dirty_chains &&
+		    pmp->sideq_count < hammer2_limit_dirty_inodes)
+		{
+			break;
+		}
+
+		if (started == 0) {
+			//trigger_syncer_start(pmp->mp);
+			vfs_allocate_syncvnode(pmp->mp);
+			started = 1;
+		}
+
+		/*
+		 * Interlocked re-test, sleep, and retry.
+		 */
+		//pcatch = curthread->td_proc ? PCATCH : 0;
+		//tsleep_interlock(&pmp->inmem_dirty_chains, pcatch);
+
+		atomic_set_int(&pmp->inmem_dirty_chains,
+			       HAMMER2_DIRTYCHAIN_WAITING);
+
+		if (waiting < hammer2_limit_dirty_chains &&
+		    pmp->sideq_count < hammer2_limit_dirty_inodes) {
+			break;
+		}
+		error = tsleep(&pmp->inmem_dirty_chains,
+			       PINTERLOCKED | pcatch,
+			       "h2memw", hz);
+		if (error == ERESTART)
+			break;
+	}
+	if (started) hprintf("fix me xxx");
+		//trigger_syncer_stop(pmp->mp);
+}
+
+/*
+ * It is possible for an excessive number of dirty chains or dirty inodes
+ * to build up.  When this occurs we start an asynchronous filesystem sync.
+ * If the level continues to build up, we stall, waiting for it to drop,
+ * with some hysteresis.
+ *
+ * This relies on the kernel calling hammer2_vfs_modifying() prior to
+ * obtaining any vnode locks before making a modifying VOP call.
+ */
+ /*
+static int
+hammer2_vfs_modifying(struct mount *mp)
+{
+	if (mp->mnt_flag & MNT_RDONLY)
+		return EROFS;
+	hammer2_pfs_memory_wait(MPTOPMP(mp));
+
+	return 0;
+}*/
+
+/*
+ * Wake up any stalled frontend ops waiting, with hysteresis, using
+ * 2/3 of the limit.
+ */
+void
+hammer2_pfs_memory_wakeup(hammer2_pfs_t *pmp, int count)
+{
+	uint32_t waiting;
+
+	if (pmp) {
+		waiting = atomic_fetchadd_int(&pmp->inmem_dirty_chains, count);
+		/* don't need --waiting to test flag */
+
+		if ((waiting & HAMMER2_DIRTYCHAIN_WAITING) &&
+		    (pmp->inmem_dirty_chains & HAMMER2_DIRTYCHAIN_MASK) <=
+		    hammer2_limit_dirty_chains * 2 / 3 &&
+		    pmp->sideq_count <= hammer2_limit_dirty_inodes * 2 / 3) {
+			atomic_clear_int(&pmp->inmem_dirty_chains,
+					 HAMMER2_DIRTYCHAIN_WAITING);
+			wakeup(&pmp->inmem_dirty_chains);
+		}
+	}
+}
+
+void
+hammer2_pfs_memory_inc(hammer2_pfs_t *pmp)
+{
+	if (pmp) {
+		atomic_add_int(&pmp->inmem_dirty_chains, 1);
+	}
+}
+
+/*
+ * Volume header data locks
+ 
+void
+hammer2_voldata_lock(hammer2_dev_t *hmp)
+{
+	lockmgr(&hmp->vollk, LK_EXCLUSIVE);
+
+    hammer2_lk_ex(&hmp->vollk);
+}
+
+void
+hammer2_voldata_unlock(hammer2_dev_t *hmp)
+{
+	ckmgr(&hmp->vollk, LK_RELEASE);
+
+    hammer2_lk_unlock(&hmp->vollk);
+}*/
+
 static int
 hammer2_vget(struct mount *mp, ino_t ino, struct vnode **vpp)
 {
@@ -2269,4 +2442,5 @@ const struct vfsops hammer2_vfsops = {
 	.vfs_init = hammer2_init,
 	.vfs_sysctl = hammer2_sysctl,
 	.vfs_checkexp = hammer2_check_export,
+	//.vfs_modifying	= hammer2_vfs_modifying,
 };

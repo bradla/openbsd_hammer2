@@ -133,8 +133,12 @@ hammer2_ioctl_pfs_get(hammer2_inode_t *ip, void *data)
 			chain = NULL;
 			break;
 		}
+		//chain = hammer2_chain_next(&parent, chain, &key_next,
+		//    HAMMER2_KEY_MAX, &error, HAMMER2_LOOKUP_SHARED);
 		chain = hammer2_chain_next(&parent, chain, &key_next,
-		    HAMMER2_KEY_MAX, &error, HAMMER2_LOOKUP_SHARED);
+					    key_next, HAMMER2_KEY_MAX,
+					    &error,
+					    HAMMER2_LOOKUP_SHARED);
 	}
 	error = hammer2_error_to_errno(error);
 
@@ -159,8 +163,12 @@ hammer2_ioctl_pfs_get(hammer2_inode_t *ip, void *data)
 		if (parent == NULL) {
 			pfs->name_next = (hammer2_key_t)-1;
 		} else {
+			//chain = hammer2_chain_next(&parent, chain, &key_next,
+			//    HAMMER2_KEY_MAX, &error, HAMMER2_LOOKUP_SHARED);
 			chain = hammer2_chain_next(&parent, chain, &key_next,
-			    HAMMER2_KEY_MAX, &error, HAMMER2_LOOKUP_SHARED);
+						    key_next, HAMMER2_KEY_MAX,
+						    &error,
+						    HAMMER2_LOOKUP_SHARED);			
 			if (chain)
 				pfs->name_next = chain->bref.key;
 			else
@@ -219,8 +227,9 @@ hammer2_ioctl_pfs_lookup(hammer2_inode_t *ip, void *data)
 		if (hammer2_chain_dirent_test(chain, pfs->name, len))
 			break;
 		chain = hammer2_chain_next(&parent, chain, &key_next,
-		    lhc + HAMMER2_DIRHASH_LOMASK, &error,
-		    HAMMER2_LOOKUP_SHARED);
+					   key_next,
+					   lhc + HAMMER2_DIRHASH_LOMASK,
+					   &error, HAMMER2_LOOKUP_SHARED);
 	}
 	error = hammer2_error_to_errno(error);
 
@@ -892,6 +901,8 @@ hammer2_ioctl_growfs(hammer2_inode_t *ip, void *data)
 	hammer2_off_t size, delta;
 	hammer2_tid_t mtid;
 	struct disklabel dl;
+
+    //struct vattr_lite va;
 	struct buf *bp;
 	int i, error;
 	daddr_t blkno;

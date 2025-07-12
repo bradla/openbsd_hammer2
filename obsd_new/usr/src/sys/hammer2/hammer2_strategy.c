@@ -90,6 +90,69 @@ hammer2_strategy(void *v)
 	return (0);
 }
 
+static int
+hammer2_vop_bmap_impl(struct vop_bmap_args_hammer2 *ap)
+{
+	hammer2_xop_bmap_t *xop;
+	hammer2_inode_t *ip;
+	int error;
+
+	ip = VTOI(ap->a_vp);
+
+	if (ap->a_doffsetp == NULL)
+		return (0);
+	if (ap->a_runp)
+		*ap->a_runp = 0; 
+	if (ap->a_runb)
+		*ap->a_runb = 0; 
+
+	xop = hammer2_xop_alloc(ip, 0);
+	xop->loffset = ap->a_loffset;
+	hammer2_xop_start(&xop->head, &hammer2_bmap_desc);
+	error = hammer2_xop_collect(&xop->head, 0);
+	error = hammer2_error_to_errno(error);
+	if (error) {
+		if (error == ENOENT)
+			error = 0; 
+		*ap->a_doffsetp = NOOFFSET;
+	} else {
+		KKASSERT(xop->offset != HAMMER2_OFF_MASK);
+		*ap->a_doffsetp = xop->offset;
+	}
+	hammer2_xop_retire(&xop->head, HAMMER2_XOPMASK_VOP);
+
+	return (error);
+}
+
+/*
+ * Return the largest contiguous physical disk range for the logical
+ * request, in bytes.
+ *
+ * (struct vnode *vp, off_t loffset, off_t *doffsetp, int *runp, int *runb)
+ *
+ * Basically disabled, the logical buffer write thread has to deal with
+ * buffers one-at-a-time.  Note that this should not prevent cluster_read()
+ * from reading-ahead, it simply prevents it from trying form a single
+ * cluster buffer for the logical request.  H2 already uses 64KB buffers!
+ */
+ 
+int
+hammer2_vop_bmap(struct vop_bmap_args_hammer2 *ap)
+{
+	if (ap->a_cmd == BUF_CMD_SEEK)
+		return (hammer2_vop_bmap_impl(ap));
+
+	*ap->a_doffsetp = NOOFFSET;
+	if (ap->a_runp)
+		*ap->a_runp = 0;
+	if (ap->a_runb)
+		*ap->a_runb = 0;
+	return (EOPNOTSUPP);
+}
+
+/****************************************************************************
+ *				READ SUPPORT				    *
+ ****************************************************************************/
 /*
  * Callback used in read path in case that a block is compressed with LZ4.
  */

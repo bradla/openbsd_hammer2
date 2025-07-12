@@ -416,6 +416,7 @@ hammer2_setattr(void *v)
 				hammer2_extend_file(ip, vap->va_size);
 			}
 			hammer2_inode_modify(ip);
+			ip->meta.ctime = ctime;
 			ip->meta.mtime = ctime;
 			break;
 		case VDIR:
@@ -982,10 +983,12 @@ hammer2_write(void *v)
 static void
 hammer2_truncate_file(hammer2_inode_t *ip, hammer2_key_t nsize)
 {
+	int nblksize;
 	hammer2_mtx_assert_locked(&ip->lock);
 
 	hammer2_mtx_unlock(&ip->lock);
 	if (ip->vp) {
+		nblksize = hammer2_calc_logical(ip, 0, NULL, NULL);
 		uvm_vnp_setsize(ip->vp, nsize);
 		uvm_vnp_uncache(ip->vp);
 	}
@@ -1018,6 +1021,8 @@ hammer2_extend_file(hammer2_inode_t *ip, hammer2_key_t nsize)
 	hammer2_key_t osize;
 	struct buf *bp;
 	int error;
+	int nblksize;
+	int oblksize;
 
 	hammer2_mtx_assert_locked(&ip->lock);
 
@@ -1056,6 +1061,8 @@ hammer2_extend_file(hammer2_inode_t *ip, hammer2_key_t nsize)
 	}
 	hammer2_mtx_unlock(&ip->lock);
 	if (ip->vp) {
+		oblksize = hammer2_calc_logical(ip, 0, NULL, NULL);
+		nblksize = hammer2_calc_logical(ip, 0, NULL, NULL);
 		uvm_vnp_setsize(ip->vp, nsize);
 		uvm_vnp_uncache(ip->vp);
 	}
@@ -1369,6 +1376,7 @@ hammer2_mknod(void *v)
 		hammer2_update_time(&mtime);
 		hammer2_inode_modify(dip);
 		dip->meta.mtime = mtime;
+		dip->meta.ctime = mtime;
 		/*hammer2_inode_unlock(dip);*/
 	}
 	hammer2_inode_unlock(dip);
@@ -1468,6 +1476,7 @@ hammer2_mkdir(void *v)
 		hammer2_update_time(&mtime);
 		hammer2_inode_modify(dip);
 		dip->meta.mtime = mtime;
+		dip->meta.ctime = mtime;
 		/*hammer2_inode_unlock(dip);*/
 	}
 	hammer2_inode_unlock(dip);
@@ -1652,6 +1661,7 @@ hammer2_rmdir(void *v)
 		hammer2_update_time(&mtime);
 		hammer2_inode_modify(dip);
 		dip->meta.mtime = mtime;
+		dip->meta.ctime = mtime;
 		/*hammer2_inode_unlock(dip);*/
 	}
 	hammer2_inode_unlock(dip);
@@ -1737,6 +1747,7 @@ hammer2_remove(void *v)
 		hammer2_update_time(&mtime);
 		hammer2_inode_modify(dip);
 		dip->meta.mtime = mtime;
+		dip->meta.ctime = mtime;
 		/*hammer2_inode_unlock(dip);*/
 	}
 	hammer2_inode_unlock(dip);
@@ -2162,6 +2173,7 @@ hammer2_symlink(void *v)
 		hammer2_update_time(&mtime);
 		hammer2_inode_modify(dip);
 		dip->meta.mtime = mtime;
+		dip->meta.ctime = mtime;
 		/*hammer2_inode_unlock(dip);*/
 	}
 	hammer2_inode_unlock(dip);

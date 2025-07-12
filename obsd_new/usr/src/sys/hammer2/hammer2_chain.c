@@ -41,6 +41,8 @@
 
 #include <crypto/sha2.h>
 
+#define	B_IOISSUED	0x00001000	/* Flag when I/O issued (vfs can clr) */
+
 static hammer2_chain_t *hammer2_chain_create_indirect(hammer2_chain_t *,
     hammer2_key_t, int, hammer2_tid_t, int, int *);
 static int hammer2_chain_delete_obref(hammer2_chain_t *, hammer2_chain_t *,
@@ -486,6 +488,8 @@ hammer2_chain_lastdrop(hammer2_chain_t *chain, int depth)
 		if (chain->flags & HAMMER2_CHAIN_MODIFIED) {
 			atomic_clear_int(&chain->flags, HAMMER2_CHAIN_MODIFIED);
 			atomic_add_int(&hammer2_count_chain_modified, -1);
+			if (chain->pmp)
+	        	hammer2_pfs_memory_wakeup(chain->pmp, -1);
 		}
 		/* spinlock still held */
 	}
@@ -520,6 +524,7 @@ hammer2_chain_lastdrop(hammer2_chain_t *chain, int depth)
 	 * remaining possible accessors that might bump chain's refs before
 	 * we can safely drop chain's refs with intent to free the chain.
 	 */
+	/// XXX hmp = chain->hmp;
 	rdrop = NULL;
 	parent = chain->parent;
 
@@ -813,6 +818,7 @@ hammer2_chain_load_data(hammer2_chain_t *chain)
 {
 	hammer2_dev_t *hmp;
 	hammer2_blockref_t *bref;
+	hammer2_io_t *dio;
 	char *bdata;
 	int error;
 
@@ -846,20 +852,27 @@ again:
 	 * We own CHAIN_IOINPROG.
 	 * Degenerate case if we raced another load.
 	 */
-	if (chain->data)
-		goto done;
+	/*if (chain->data)
+		goto done;*/
+	if (chain->data) {
+        if (chain->dio)	hprintf("XXX call to bkvasync \n");
+			/* hammer2_io_bkvasync(chain->dio); XXX */
+        goto done;
+	}
 
 	/*
 	 * The getblk() optimization can only be used on newly created
 	 * elements if the physical block size matches the request.
 	 */
 	bref = &chain->bref;
-	if (chain->flags & HAMMER2_CHAIN_INITIAL)
+	if (chain->flags & HAMMER2_CHAIN_INITIAL) {
 		error = hammer2_io_new(hmp, bref->type, bref->data_off,
 		    chain->bytes, &chain->dio);
-	else
+	} else {
 		error = hammer2_io_bread(hmp, bref->type, bref->data_off,
 		    chain->bytes, &chain->dio);
+		hammer2_adjreadcounter(chain->bref.type, chain->bytes);
+	}
 	if (error) {
 		hprintf("%s blockref I/O error %d at %016llx\n",
 		    hammer2_breftype_to_str(bref->type), error,
@@ -870,6 +883,33 @@ again:
 	}
 	chain->error = 0;
 
+	/*
+	 * This isn't perfect and can be ignored on OSs which do not have
+	 * an indication as to whether a buffer is coming from cache or
+	 * if I/O was actually issued for the read.  TESTEDGOOD will work
+	 * pretty well without the B_IOISSUED logic because chains are
+	 * cached, but in that situation (without B_IOISSUED) it will not
+	 * detect whether a re-read via I/O is corrupted verses the original
+	 * read.
+	 *
+	 * We can't re-run the CRC on every fresh lock.  That would be
+	 * insanely expensive.
+	 *
+	 * If the underlying kernel buffer covers the entire chain we can
+	 * use the B_IOISSUED indication to determine if we have to re-run
+	 * the CRC on chain data for chains that managed to stay cached
+	 * across the kernel disposal of the original buffer.
+	 */
+	if ((dio = chain->dio) != NULL && dio->bp) {
+		struct buf *bp = dio->bp;
+
+		if (dio->psize == chain->bytes &&
+		    (bp->b_flags & B_IOISSUED)) {
+			atomic_clear_int(&chain->flags,
+					 HAMMER2_CHAIN_TESTEDGOOD);
+			bp->b_flags &= ~B_IOISSUED;
+		}
+	}
 	/*
 	 * NOTE: A locked chain's data cannot be modified without first
 	 *	 calling hammer2_chain_modify().
@@ -2360,6 +2400,7 @@ done:
  * After having issued a lookup we can iterate all matching keys.
  *
  * If chain is non-NULL we continue the iteration from just after it's index.
+ *
  * If chain is NULL we assume the parent was exhausted and continue the
  * iteration at the next parent.
  *
@@ -2371,30 +2412,37 @@ done:
  *
  * parent must be locked on entry and remains locked throughout.  chain's
  * lock status must match flags.  Chain is always at least referenced.
+ *
+ * WARNING!  The MATCHIND flag does not apply to this function.
  */
 hammer2_chain_t *
 hammer2_chain_next(hammer2_chain_t **parentp, hammer2_chain_t *chain,
-    hammer2_key_t *key_nextp, hammer2_key_t key_end, int *errorp, int flags)
+		   hammer2_key_t *key_nextp,
+		   hammer2_key_t key_beg, hammer2_key_t key_end,
+		   int *errorp, int flags)
 {
 	hammer2_chain_t *parent;
-	hammer2_key_t key_beg;
 	int how_maybe;
 
-	/* Calculate locking flags for upward recursion. */
+	/*
+	 * Calculate locking flags for upward recursion.
+	 */
 	how_maybe = HAMMER2_RESOLVE_MAYBE;
 	if (flags & HAMMER2_LOOKUP_SHARED)
 		how_maybe |= HAMMER2_RESOLVE_SHARED;
 
 	parent = *parentp;
-	hammer2_mtx_assert_locked(&parent->lock);
 	*errorp = 0;
 
-	/* Calculate the next index and recalculate the parent if necessary. */
+	/*
+	 * Calculate the next index and recalculate the parent if necessary.
+	 */
 	if (chain) {
 		key_beg = chain->bref.key +
-		    ((hammer2_key_t)1 << chain->bref.keybits);
+			  ((hammer2_key_t)1 << chain->bref.keybits);
 		hammer2_chain_unlock(chain);
 		hammer2_chain_drop(chain);
+
 		/*
 		 * chain invalid past this point, but we can still do a
 		 * pointer comparison w/parent.
@@ -2403,13 +2451,15 @@ hammer2_chain_next(hammer2_chain_t **parentp, hammer2_chain_t *chain,
 		 * in the inode has an invalid index and must terminate.
 		 */
 		if (chain == parent)
-			return (NULL);
+			return(NULL);
 		if (key_beg == 0 || key_beg > key_end)
-			return (NULL);
+			return(NULL);
 		chain = NULL;
 	} else if (parent->bref.type != HAMMER2_BREF_TYPE_INDIRECT &&
-	    parent->bref.type != HAMMER2_BREF_TYPE_FREEMAP_NODE) {
-		/* We reached the end of the iteration. */
+		   parent->bref.type != HAMMER2_BREF_TYPE_FREEMAP_NODE) {
+		/*
+		 * We reached the end of the iteration.
+		 */
 		return (NULL);
 	} else {
 		/*
@@ -2420,15 +2470,18 @@ hammer2_chain_next(hammer2_chain_t **parentp, hammer2_chain_t *chain,
 		 * node).
 		 */
 		key_beg = parent->bref.key +
-		    ((hammer2_key_t)1 << parent->bref.keybits);
+			  ((hammer2_key_t)1 << parent->bref.keybits);
 		if (key_beg == 0 || key_beg > key_end)
 			return (NULL);
 		parent = hammer2_chain_repparent(parentp, how_maybe);
 	}
 
-	/* And execute. */
-	return (hammer2_chain_lookup(parentp, key_nextp, key_beg, key_end,
-	    errorp, flags));
+	/*
+	 * And execute
+	 */
+	return (hammer2_chain_lookup(parentp, key_nextp,
+				     key_beg, key_end,
+				     errorp, flags));
 }
 
 /*
@@ -4651,6 +4704,77 @@ hammer2_chain_setcheck(hammer2_chain_t *chain, void *bdata)
 		break;
 	}
 }
+
+
+/*
+ * Characterize a failed check code and try to trace back to the inode.
+ */
+ /*
+static void
+hammer2_characterize_failed_chain(hammer2_chain_t *chain, uint64_t check,
+				  int bits)
+{
+	hammer2_chain_t *lchain;
+	hammer2_chain_t *ochain;
+	int did;
+
+	did = krateprintf(&krate_h2chk,
+		"chain %016jx.%02x (%s) meth=%02x CHECK FAIL "
+		"(flags=%08x, bref/data ",
+		chain->bref.data_off,
+		chain->bref.type,
+		hammer2_bref_type_str(chain->bref.type),
+		chain->bref.methods,
+		chain->flags);
+	if (did == 0)
+		return; XXX fix 
+
+	if (bits == 32) {
+		hprintf("%08x/%08x)\n",
+			chain->bref.check.iscsi32.value,
+			(uint32_t)check);
+	} else {
+		hprintf("%016jx/%016jx)\n",
+			chain->bref.check.xxhash64.value,
+			check);
+	}
+
+
+	ochain = chain;
+	lchain = chain;
+	while (chain && chain->bref.type != HAMMER2_BREF_TYPE_INODE) {
+		lchain = chain;
+		chain = chain->parent;
+	}
+
+	if (chain && chain->bref.type == HAMMER2_BREF_TYPE_INODE &&
+	    ((chain->bref.flags & HAMMER2_BREF_FLAG_PFSROOT) == 0 ||
+	     (lchain->bref.key & HAMMER2_DIRHASH_VISIBLE))) {
+		hprintf("   Resides at/in inode %ld\n",
+			(long)chain->bref.key);
+	} else if (chain && chain->bref.type == HAMMER2_BREF_TYPE_INODE) {
+		hprintf("   Resides in inode index - CRITICAL!!!\n");
+	} else {
+		hprintf("   Resides in root index - CRITICAL!!!\n");
+	}
+	if (ochain->hmp) {
+		const char *pfsname = "UNKNOWN";
+		int i;
+
+		if (ochain->pmp) {
+			for (i = 0; i < HAMMER2_MAXCLUSTER; ++i) {
+				if (ochain->pmp->pfs_hmps[i] == ochain->hmp &&
+				    ochain->pmp->pfs_names[i]) {
+					pfsname = ochain->pmp->pfs_names[i];
+					break;
+				}
+			}
+		}
+		hprintf("   In pfs %s on device %s\n",
+			pfsname, ochain->hmp->devrepname);
+	}
+}
+*/
 
 /*
  * Returns non-zero on success, 0 on failure.

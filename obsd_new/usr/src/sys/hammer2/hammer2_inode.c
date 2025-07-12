@@ -801,6 +801,7 @@ again:
 		nip->next = NULL;
 		*xipp = nip;
 		atomic_set_int(&nip->flags, HAMMER2_INODE_ONHASH);
+		// XXX atomic_add_long(&pmp->inum_count, 1);
 		hammer2_spin_unex(&hash->spin);
 	}
 
@@ -1310,12 +1311,15 @@ int
 hammer2_inode_unlink_finisher(hammer2_inode_t *ip, struct vnode **vprecyclep)
 {
 	struct vnode *vp;
-
+	uint64_t ctime;
+	
 	/*
 	 * Decrement nlinks.  Catch a bad nlinks count here too (e.g. 0 or
 	 * negative), and just assume a transition to 0.
 	 */
 	if ((int64_t)ip->meta.nlinks <= 1) {
+		hammer2_update_time(&ctime);
+	} else {
 		atomic_set_int(&ip->flags, HAMMER2_INODE_ISUNLINKED);
 
 		/*
@@ -1354,10 +1358,12 @@ hammer2_inode_unlink_finisher(hammer2_inode_t *ip, struct vnode **vprecyclep)
 
 	/* Adjust nlinks and retain the inode on the media for now. */
 	hammer2_inode_modify(ip);
-	if ((int64_t)ip->meta.nlinks > 1)
+	if ((int64_t)ip->meta.nlinks > 1) {
 		--ip->meta.nlinks;
-	else
+		ip->meta.ctime = ctime;
+	} else {
 		ip->meta.nlinks = 0;
+	}
 
 	return (0);
 }

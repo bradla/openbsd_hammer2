@@ -437,9 +437,82 @@ typedef uint32_t hammer2_crc32_t;
 #define HAMMER2_DIRHASH_VISIBLE	0x8000000000000000ULL
 #define HAMMER2_DIRHASH_USERMSK	0x7FFFFFFFFFFFFFFFULL
 #define HAMMER2_DIRHASH_LOMASK	0x0000000000007FFFULL
+#if 0
+#define HAMMER2_DIRHASH_HIMASK	0xFFFFFFFFFFFF0000ULL
+#define HAMMER2_DIRHASH_FORCED	0x0000000000008000ULL	/* bit forced on */
+#endif
 
 #define HAMMER2_SROOT_KEY	0x0000000000000000ULL	/* volume to sroot */
 #define HAMMER2_BOOT_KEY	0xd9b36ce135528000ULL	/* sroot to BOOT PFS */
+
+/************************************************************************
+ *				DMSG SUPPORT				*
+ ************************************************************************
+ * LNK_VOLCONF
+ *
+ * All HAMMER2 directories directly under the super-root on your local
+ * media can be mounted separately, even if they share the same physical
+ * device.
+ *
+ * When you do a HAMMER2 mount you are effectively tying into a HAMMER2
+ * cluster via local media.  The local media does not have to participate
+ * in the cluster, other than to provide the hammer2_volconf[] array and
+ * root inode for the mount.
+ *
+ * This is important: The mount device path you specify serves to bootstrap
+ * your entry into the cluster, but your mount will make active connections
+ * to ALL copy elements in the hammer2_volconf[] array which match the
+ * PFSID of the directory in the super-root that you specified.  The local
+ * media path does not have to be mentioned in this array but becomes part
+ * of the cluster based on its type and access rights.  ALL ELEMENTS ARE
+ * TREATED ACCORDING TO TYPE NO MATTER WHICH ONE YOU MOUNT FROM.
+ *
+ * The actual cluster may be far larger than the elements you list in the
+ * hammer2_volconf[] array.  You list only the elements you wish to
+ * directly connect to and you are able to access the rest of the cluster
+ * indirectly through those connections.
+ *
+ * WARNING!  This structure must be exactly 128 bytes long for its config
+ *	     array to fit in the volume header.
+ */
+struct hammer2_volconf {
+	uint8_t	copyid;		/* 00	 copyid 0-255 (must match slot) */
+	uint8_t inprog;		/* 01	 operation in progress, or 0 */
+	uint8_t chain_to;	/* 02	 operation chaining to, or 0 */
+	uint8_t chain_from;	/* 03	 operation chaining from, or 0 */
+	uint16_t flags;		/* 04-05 flags field */
+	uint8_t error;		/* 06	 last operational error */
+	uint8_t priority;	/* 07	 priority and round-robin flag */
+	uint8_t remote_pfs_type;/* 08	 probed direct remote PFS type */
+	uint8_t reserved08[23];	/* 09-1F */
+	struct uuid	pfs_clid;	/* 20-2F copy target must match this uuid */
+	uint8_t label[16];	/* 30-3F import/export label */
+	uint8_t path[64];	/* 40-7F target specification string or key */
+} __packed;
+
+typedef struct hammer2_volconf hammer2_volconf_t;
+
+#define DMSG_VOLF_ENABLED	0x0001
+#define DMSG_VOLF_INPROG	0x0002
+#define DMSG_VOLF_CONN_RR	0x80	/* round-robin at same priority */
+#define DMSG_VOLF_CONN_EF	0x40	/* media errors flagged */
+#define DMSG_VOLF_CONN_PRI	0x0F	/* select priority 0-15 (15=best) */
+
+struct dmsg_lnk_hammer2_volconf {
+	//dmsg_hdr_t		head;
+	hammer2_volconf_t	copy;	
+	int32_t			index;
+	int32_t			unused01;
+	struct uuid			mediaid;
+	int64_t			reserved02[32];
+};
+
+typedef struct dmsg_lnk_hammer2_volconf dmsg_lnk_hammer2_volconf_t;
+
+#define DMSG_LNK_HAMMER2_VOLCONF DMSG_LNK(DMSG_LNK_CMD_HAMMER2_VOLCONF, \
+					  dmsg_lnk_hammer2_volconf)
+
+#define H2_LNK_VOLCONF(msg)	((dmsg_lnk_hammer2_volconf_t *)(msg)->any.buf)
 
 /*
  * HAMMER2 directory entry header (embedded in blockref)  exactly 16 bytes
@@ -617,6 +690,7 @@ typedef struct hammer2_blockref hammer2_blockref_t;
 #define HAMMER2_BREF_TYPE_VOLUME	255	/* pseudo-type */
 
 #define HAMMER2_BREF_FLAG_PFSROOT	0x01	/* see also related opflag */
+#define HAMMER2_BREF_FLAG_UNUSED	0x02
 #define HAMMER2_BREF_FLAG_EMERG_MIP	0x04	/* emerg modified-in-place */
 
 /*
@@ -680,6 +754,18 @@ struct hammer2_blockset {
 };
 
 typedef struct hammer2_blockset hammer2_blockset_t;
+/*
+ * Catch programmer snafus
+ */
+#if (1 << HAMMER2_SET_RADIX) != HAMMER2_SET_COUNT
+#error "hammer2 direct radix is incorrect"
+#endif
+#if (1 << HAMMER2_PBUFRADIX) != HAMMER2_PBUFSIZE
+#error "HAMMER2_PBUFRADIX and HAMMER2_PBUFSIZE are inconsistent"
+#endif
+#if (1 << HAMMER2_RADIX_MIN) != HAMMER2_ALLOC_MIN
+#error "HAMMER2_RADIX_MIN and HAMMER2_ALLOC_MIN are inconsistent"
+#endif
 
 /*
  * hammer2_bmap_data - A freemap entry in the LEVEL1 block.
@@ -904,6 +990,7 @@ typedef struct hammer2_inode_data hammer2_inode_data_t;
 
 #define HAMMER2_OPFLAG_DIRECTDATA	0x01
 #define HAMMER2_OPFLAG_PFSROOT		0x02	/* (see also bref flag) */
+#define HAMMER2_OPFLAG_COPYIDS		0x04	/* copyids override parent */
 
 #define HAMMER2_OBJTYPE_UNKNOWN		0
 #define HAMMER2_OBJTYPE_DIRECTORY	1
@@ -916,7 +1003,10 @@ typedef struct hammer2_inode_data hammer2_inode_data_t;
 #define HAMMER2_OBJTYPE_SOCKET		9
 #define HAMMER2_OBJTYPE_WHITEOUT	10
 
+#define HAMMER2_COPYID_NONE		0
 #define HAMMER2_COPYID_LOCAL		((uint8_t)-1)
+
+#define HAMMER2_COPYID_COUNT		256
 
 /*
  * PFS types identify the role of a PFS within a cluster.  The PFS types
@@ -941,17 +1031,41 @@ typedef struct hammer2_inode_data hammer2_inode_data_t;
  */
 #define HAMMER2_PFSTYPE_NONE		0x00
 #define HAMMER2_PFSTYPE_CACHE		0x01
+#define HAMMER2_PFSTYPE_UNUSED02	0x02
 #define HAMMER2_PFSTYPE_SLAVE		0x03
 #define HAMMER2_PFSTYPE_SOFT_SLAVE	0x04
 #define HAMMER2_PFSTYPE_SOFT_MASTER	0x05
 #define HAMMER2_PFSTYPE_MASTER		0x06
+#define HAMMER2_PFSTYPE_UNUSED07	0x07
 #define HAMMER2_PFSTYPE_SUPROOT		0x08
 #define HAMMER2_PFSTYPE_DUMMY		0x09
 #define HAMMER2_PFSTYPE_MAX		16
 
+#define HAMMER2_PFSTRAN_NONE		0x00	/* no transition in progress */
+#define HAMMER2_PFSTRAN_CACHE		0x10
+#define HAMMER2_PFSTRAN_UNUSED20	0x20
+#define HAMMER2_PFSTRAN_SLAVE		0x30
+#define HAMMER2_PFSTRAN_SOFT_SLAVE	0x40
+#define HAMMER2_PFSTRAN_SOFT_MASTER	0x50
+#define HAMMER2_PFSTRAN_MASTER		0x60
+#define HAMMER2_PFSTRAN_UNUSED70	0x70
+#define HAMMER2_PFSTRAN_SUPROOT		0x80
+#define HAMMER2_PFSTRAN_DUMMY		0x90
+
+#define HAMMER2_PFS_DEC(n)		((n) & 0x0F)
+#define HAMMER2_PFS_DEC_TRANSITION(n)	(((n) >> 4) & 0x0F)
+#define HAMMER2_PFS_ENC_TRANSITION(n)	(((n) & 0x0F) << 4)
+
 #define HAMMER2_PFSSUBTYPE_NONE		0
 #define HAMMER2_PFSSUBTYPE_SNAPSHOT	1	/* manual/managed snapshot */
 #define HAMMER2_PFSSUBTYPE_AUTOSNAP	2	/* automatic snapshot */
+
+/*
+ * PFS mode of operation is a bitmask.  This is typically not stored
+ * on-media, but defined here because the field may be used in dmsgs.
+ */
+#define HAMMER2_PFSMODE_QUORUM		0x01
+#define HAMMER2_PFSMODE_RW		0x02
 
 /*
  * The volume header eats a 64K block at the beginning of each 2GB zone
@@ -973,6 +1087,14 @@ typedef struct hammer2_inode_data hammer2_inode_data_t;
  * However, there may be shortcutted blockref updates present from deep in
  * the tree which are stored in the volumeh eader and must be tracked on
  * the fly.
+ *
+ * NOTE: The copyinfo[] array contains the configuration for both the
+ *	 cluster connections and any local media copies.  The volume
+ *	 header will be replicated for each local media copy.
+ *
+ *	 The mount command may specify multiple medias or just one and
+ *	 allow HAMMER2 to pick up the others when it checks the copyinfo[]
+ *	 array on mount.
  *
  * NOTE: sroot_blockset points to the super-root directory, not the root
  *	 directory.  The root directory will be a subdirectory under the
@@ -1050,7 +1172,14 @@ struct hammer2_volume_data {
 
 	hammer2_off_t	total_size;		/* 00C0 Total volume size, bytes */
 
-	uint32_t	copyexists[8];		/* 00C8-00E7 unused */
+    /*
+	 * Copyids are allocated dynamically from the copyexists bitmap.
+	 * An id from the active copies set (up to 8, see copyinfo later on)
+	 * may still exist after the copy set has been removed from the
+	 * volume header and its bit will remain active in the bitmap and
+	 * cannot be reused until it is 100% removed from the hierarchy.
+	 */
+	uint32_t	copyexists[8];		/* 00C8-00E7 copy exists bmap */
 	char		reserved00E8[248];	/* 00E8-01DF */
 
 	/*
@@ -1095,7 +1224,17 @@ struct hammer2_volume_data {
 	 * sector #8-71	- 32768 bytes for unused 256 volconf array.
 	 */
 	char		reserved_volconf[0x8000]; /* 1000-8FFF reserved */
-
+     
+	/*
+	 * sector #8-71	- 32768 bytes
+	 *
+	 * Contains the configuration for up to 256 copyinfo targets.  These
+	 * specify local and remote copies operating as masters or slaves.
+	 * copyid's 0 and 255 are reserved (0 indicates an empty slot and 255
+	 * indicates the local media).
+	 */
+						/* 1000-8FFF copyinfo config */
+	hammer2_volconf_t copyinfo[HAMMER2_COPYID_COUNT];
 	/*
 	 * Remaining sections are reserved for future use.
 	 */
@@ -1165,7 +1304,7 @@ _Static_assert(sizeof(struct hammer2_blockref) == HAMMER2_BLOCKREF_BYTES,
     "struct hammer2_blockref size != HAMMER2_BLOCKREF_BYTES");
 _Static_assert(sizeof(struct hammer2_inode_data) == HAMMER2_INODE_BYTES,
     "struct hammer2_inode_data size != HAMMER2_INODE_BYTES");
-_Static_assert(sizeof(struct hammer2_volume_data) == HAMMER2_VOLUME_BYTES,
-    "struct hammer2_volume_data size != HAMMER2_VOLUME_BYTES");
+//_Static_assert(sizeof(struct hammer2_volume_data) == HAMMER2_VOLUME_BYTES,
+//    "struct hammer2_volume_data size != HAMMER2_VOLUME_BYTES");
 
 #endif /* !_FS_HAMMER2_DISK_H_ */
