@@ -35,12 +35,19 @@
  * SUCH DAMAGE.
  */
 
+#include <sys/param.h>
+#include <sys/types.h>
+#include <sys/lock.h>
+#include <sys/tree.h>
+
+//#include "hammer2_rb.h"
 #include "hammer2.h"
 #include "hammer2_mount.h"
 #include "hammer2_xxhash.h"
 
 #include <crypto/sha2.h>
 
+/* from buf.h dfly */
 #define	B_IOISSUED	0x00001000	/* Flag when I/O issued (vfs can clr) */
 
 static hammer2_chain_t *hammer2_chain_create_indirect(hammer2_chain_t *,
@@ -77,6 +84,10 @@ hammer2_chain_cmp(const hammer2_chain_t *chain1, const hammer2_chain_t *chain2)
 		return (1);
 	return (0);		/* overlap (must not cross edge boundary) */
 }
+
+/*
+ * Basic RBTree for chains (core.rbtree).
+ */
 
 RB_GENERATE(hammer2_chain_tree, hammer2_chain, rbnode, hammer2_chain_cmp);
 RB_GENERATE_SCAN(hammer2_chain_tree, hammer2_chain, rbnode);
@@ -202,8 +213,8 @@ hammer2_chain_init(hammer2_chain_t *chain)
 	RB_INIT(&chain->core.rbtree);
 	hammer2_mtx_init_recurse(&chain->lock, "h2ch_lk");
 	hammer2_mtx_init(&chain->diolk, "h2ch_dlk");
-	hammer2_lk_init(&chain->inp_lock, "h2ch_inplk");
-	hammer2_lkc_init(&chain->inp_cv, "h2ch_inplkc");
+	//hammer2_lk_init(&chain->inp_lock, "h2ch_inplk");
+	//hammer2_lkc_init(&chain->inp_cv, "h2ch_inplkc");
 	hammer2_spin_init(&chain->core.spin, "h2ch_cosp");
 }
 
@@ -212,13 +223,13 @@ hammer2_chain_init(hammer2_chain_t *chain)
  * Undone via hammer2_chain_drop().
  * Can be called with spinlock held.
  */
-void
-hammer2_chain_ref(hammer2_chain_t *chain)
-{
-	if (atomic_fetchadd_int(&chain->refs, 1) == 0) {
+//void
+//hammer2_chain_ref(hammer2_chain_t *chain)
+//{
+//	if (atomic_fetchadd_int(&chain->refs, 1) == 0) {
 		/* NOP */
-	}
-}
+//	}
+//}
 
 /*
  * Ref a locked chain and force the data to be held across an unlock.
@@ -230,7 +241,7 @@ hammer2_chain_ref_hold(hammer2_chain_t *chain)
 	hammer2_mtx_assert_locked(&chain->lock);
 
 	atomic_add_int(&chain->lockcnt, 1);
-	hammer2_chain_ref(chain);
+	//hammer2_chain_ref(chain);
 }
 
 /*
@@ -488,8 +499,8 @@ hammer2_chain_lastdrop(hammer2_chain_t *chain, int depth)
 		if (chain->flags & HAMMER2_CHAIN_MODIFIED) {
 			atomic_clear_int(&chain->flags, HAMMER2_CHAIN_MODIFIED);
 			atomic_add_int(&hammer2_count_chain_modified, -1);
-			if (chain->pmp)
-	        	hammer2_pfs_memory_wakeup(chain->pmp, -1);
+			//if (chain->pmp)
+	        	//hammer2_pfs_memory_wakeup(chain->pmp, -1);
 		}
 		/* spinlock still held */
 	}
@@ -626,8 +637,8 @@ hammer2_chain_lastdrop(hammer2_chain_t *chain, int depth)
 		atomic_clear_int(&chain->flags, HAMMER2_CHAIN_ALLOCATED);
 		hammer2_mtx_destroy(&chain->lock);
 		hammer2_mtx_destroy(&chain->diolk);
-		hammer2_lk_destroy(&chain->inp_lock);
-		hammer2_lkc_destroy(&chain->inp_cv);
+		//hammer2_lk_destroy(&chain->inp_lock);
+		//hammer2_lkc_destroy(&chain->inp_cv);
 		hammer2_spin_destroy(&chain->core.spin);
 		chain->hmp = NULL;
 		hfree(chain, M_HAMMER2, sizeof(*chain));
@@ -852,19 +863,20 @@ again:
 	 * We own CHAIN_IOINPROG.
 	 * Degenerate case if we raced another load.
 	 */
-	/*if (chain->data)
-		goto done;*/
+	//if (chain->data)
+	//	goto done;
 	if (chain->data) {
         if (chain->dio)	hprintf("XXX call to bkvasync \n");
 			/* hammer2_io_bkvasync(chain->dio); XXX */
         goto done;
 	}
+	bref = &chain->bref;
 
 	/*
 	 * The getblk() optimization can only be used on newly created
 	 * elements if the physical block size matches the request.
 	 */
-	bref = &chain->bref;
+
 	if (chain->flags & HAMMER2_CHAIN_INITIAL) {
 		error = hammer2_io_new(hmp, bref->type, bref->data_off,
 		    chain->bytes, &chain->dio);
@@ -1705,8 +1717,7 @@ hammer2_chain_find(hammer2_chain_t *parent, hammer2_key_t *key_nextp,
 	info.key_end = key_end;
 	info.key_next = *key_nextp;
 
-	RB_SCAN(hammer2_chain_tree, &parent->core.rbtree,
-	    hammer2_chain_find_cmp, hammer2_chain_find_callback, &info);
+	RB_SCAN(hammer2_chain_tree, &parent->core.rbtree, hammer2_chain_find_cmp, hammer2_chain_find_callback, &info);
 	*key_nextp = info.key_next;
 
 	return (info.best);
@@ -1858,7 +1869,7 @@ hammer2_chain_get(hammer2_chain_t *parent, int generation,
 hammer2_chain_t *
 hammer2_chain_lookup_init(hammer2_chain_t *parent, int flags)
 {
-	hammer2_chain_ref(parent);
+	//hammer2_chain_ref(parent);
 
 	if (flags & HAMMER2_LOOKUP_SHARED)
 		hammer2_chain_lock(parent,
@@ -1905,7 +1916,7 @@ hammer2_chain_getparent(hammer2_chain_t *chain, int flags)
 	if (parent == NULL)
 		hpanic("no parent");
 
-	hammer2_chain_ref(parent);
+	//hammer2_chain_ref(parent);
 	if (hammer2_chain_lock(parent, flags|HAMMER2_RESOLVE_NONBLOCK) == 0)
 		return (parent);
 
@@ -1926,7 +1937,7 @@ hammer2_chain_getparent(hammer2_chain_t *chain, int flags)
 		parent = chain->parent;
 		if (parent == NULL)
 			hpanic("no parent");
-		hammer2_chain_ref(parent);
+		//hammer2_chain_ref(parent);
 	}
 	return (parent);
 }
@@ -1946,7 +1957,9 @@ static hammer2_chain_t *
 hammer2_chain_repparent(hammer2_chain_t **chainp, int flags)
 {
 	hammer2_chain_t *chain, *parent;
-	hammer2_reptrack_t reptrack, **repp;
+	//hammer2_reptrack_t reptrack, **repp;
+	struct hammer2_reptrack reptrack;
+	struct hammer2_reptrack **repp;
 
 	chain = *chainp;
 	hammer2_mtx_assert_locked(&chain->lock);
@@ -1954,7 +1967,7 @@ hammer2_chain_repparent(hammer2_chain_t **chainp, int flags)
 	parent = chain->parent;
 	KKASSERT(parent);
 
-	hammer2_chain_ref(parent);
+	//hammer2_chain_ref(parent);
 	if (hammer2_chain_lock(parent, flags|HAMMER2_RESOLVE_NONBLOCK) == 0) {
 		hammer2_chain_unlock(chain);
 		hammer2_chain_drop(chain);
@@ -1977,7 +1990,7 @@ hammer2_chain_repparent(hammer2_chain_t **chainp, int flags)
 	 */
 	hammer2_spin_init(&reptrack.spin, "h2reptrk");
 	reptrack.chain = parent;
-	hammer2_chain_ref(parent); /* for the reptrack */
+	//hammer2_chain_ref(parent); /* for the reptrack */
 
 	hammer2_spin_ex(&parent->core.spin);
 	reptrack.next = parent->core.reptrack;
@@ -2003,7 +2016,7 @@ hammer2_chain_repparent(hammer2_chain_t **chainp, int flags)
 
 		hammer2_spin_ex(&reptrack.spin);
 		parent = reptrack.chain;
-		hammer2_chain_ref(parent);
+		//hammer2_chain_ref(parent);
 		hammer2_spin_unex(&reptrack.spin);
 	}
 
@@ -2043,7 +2056,7 @@ hammer2_chain_repparent(hammer2_chain_t **chainp, int flags)
 static void
 hammer2_chain_repchange(hammer2_chain_t *parent, hammer2_chain_t *chain)
 {
-	hammer2_reptrack_t *reptrack;
+	struct hammer2_reptrack *reptrack;
 
 	KKASSERT(chain->core.live_count == 0 && RB_EMPTY(&chain->core.rbtree));
 	while (chain->core.reptrack) {
@@ -2060,7 +2073,7 @@ hammer2_chain_repchange(hammer2_chain_t *parent, hammer2_chain_t *chain)
 		reptrack->chain = parent;
 		reptrack->next = parent->core.reptrack;
 		parent->core.reptrack = reptrack;
-		hammer2_chain_ref(parent); /* reptrack */
+		//hammer2_chain_ref(parent); /* reptrack */
 
 		hammer2_spin_unex(&chain->core.spin);
 		hammer2_spin_unex(&parent->core.spin);
@@ -2177,7 +2190,7 @@ again:
 			    ((hammer2_key_t)1 << parent->bref.keybits) - 1;
 			if (key_beg == scan_beg && key_end == scan_end) {
 				chain = parent;
-				hammer2_chain_ref(chain);
+				//hammer2_chain_ref(chain);
 				hammer2_chain_lock(chain, how_maybe);
 				*key_nextp = scan_end + 1;
 				goto done;
@@ -2223,7 +2236,7 @@ again:
 				*key_nextp = key_end + 1;
 				goto done;
 			}
-			hammer2_chain_ref(parent);
+			//hammer2_chain_ref(parent);
 			hammer2_chain_lock(parent,
 			    how_always | HAMMER2_RESOLVE_LOCKAGAIN);
 			*key_nextp = key_end + 1;
@@ -2317,7 +2330,7 @@ again:
 		if (chain == NULL)
 			goto again;
 	} else {
-		hammer2_chain_ref(chain);
+		//hammer2_chain_ref(chain);
 		hammer2_spin_unex(&parent->core.spin);
 		/*
 		 * chain is referenced but not locked.  We must lock the
@@ -2400,7 +2413,7 @@ done:
  * After having issued a lookup we can iterate all matching keys.
  *
  * If chain is non-NULL we continue the iteration from just after it's index.
- *
+ 
  * If chain is NULL we assume the parent was exhausted and continue the
  * iteration at the next parent.
  *
@@ -2412,31 +2425,25 @@ done:
  *
  * parent must be locked on entry and remains locked throughout.  chain's
  * lock status must match flags.  Chain is always at least referenced.
- *
- * WARNING!  The MATCHIND flag does not apply to this function.
  */
 hammer2_chain_t *
 hammer2_chain_next(hammer2_chain_t **parentp, hammer2_chain_t *chain,
-		   hammer2_key_t *key_nextp,
-		   hammer2_key_t key_beg, hammer2_key_t key_end,
+		   hammer2_key_t *key_nextp, hammer2_key_t key_beg, hammer2_key_t key_end,
 		   int *errorp, int flags)
 {
 	hammer2_chain_t *parent;
 	int how_maybe;
-
-	/*
-	 * Calculate locking flags for upward recursion.
-	 */
+	
+	/* Calculate locking flags for upward recursion. */
 	how_maybe = HAMMER2_RESOLVE_MAYBE;
 	if (flags & HAMMER2_LOOKUP_SHARED)
 		how_maybe |= HAMMER2_RESOLVE_SHARED;
 
 	parent = *parentp;
+	hammer2_mtx_assert_locked(&parent->lock);
 	*errorp = 0;
 
-	/*
-	 * Calculate the next index and recalculate the parent if necessary.
-	 */
+    /* Calculate the next index and recalculate the parent if necessary. */
 	if (chain) {
 		key_beg = chain->bref.key +
 			  ((hammer2_key_t)1 << chain->bref.keybits);
@@ -2457,9 +2464,8 @@ hammer2_chain_next(hammer2_chain_t **parentp, hammer2_chain_t *chain,
 		chain = NULL;
 	} else if (parent->bref.type != HAMMER2_BREF_TYPE_INDIRECT &&
 		   parent->bref.type != HAMMER2_BREF_TYPE_FREEMAP_NODE) {
-		/*
-		 * We reached the end of the iteration.
-		 */
+	       /* We reached the end of the iteration. */
+
 		return (NULL);
 	} else {
 		/*
@@ -2476,9 +2482,7 @@ hammer2_chain_next(hammer2_chain_t **parentp, hammer2_chain_t *chain,
 		parent = hammer2_chain_repparent(parentp, how_maybe);
 	}
 
-	/*
-	 * And execute
-	 */
+	/* And execute. */
 	return (hammer2_chain_lookup(parentp, key_nextp,
 				     key_beg, key_end,
 				     errorp, flags));
@@ -2666,7 +2670,7 @@ again:
 		 * Recursion or not we need the chain in order to supply
 		 * the bref.
 		 */
-		hammer2_chain_ref(chain);
+		//hammer2_chain_ref(chain);
 		hammer2_spin_unex(&parent->core.spin);
 		hammer2_chain_lock(chain, how);
 	}
@@ -3513,7 +3517,7 @@ hammer2_chain_create_indirect(hammer2_chain_t *parent, hammer2_key_t create_key,
 		bsave = *bref;
 		if (chain) {
 			/* Use chain already present in the rbtree. */
-			hammer2_chain_ref(chain);
+			//hammer2_chain_ref(chain);
 			hammer2_spin_unex(&parent->core.spin);
 			hammer2_chain_lock(chain, HAMMER2_RESOLVE_NEVER);
 		} else {
@@ -3749,7 +3753,7 @@ hammer2_chain_indirect_maintenance(hammer2_chain_t *parent,
 
 		bsave = *bref;
 		if (sub) {
-			hammer2_chain_ref(sub);
+			//hammer2_chain_ref(sub);
 			hammer2_spin_unex(&chain->core.spin);
 			hammer2_chain_lock(sub, HAMMER2_RESOLVE_NEVER);
 		} else {

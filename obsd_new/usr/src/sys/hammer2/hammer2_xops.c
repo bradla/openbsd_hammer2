@@ -191,10 +191,8 @@ hammer2_xop_readdir(hammer2_xop_t *arg, void *scratch, int clindex)
 		if (error)
 			goto break2;
 		chain = hammer2_chain_next(&parent, chain, &key_next,
-					   key_next, HAMMER2_KEY_MAX,
-					   &error,
-					   HAMMER2_LOOKUP_ALWAYS |
-					   HAMMER2_LOOKUP_SHARED);
+					   key_next, HAMMER2_KEY_MAX, &error,
+					   HAMMER2_LOOKUP_ALWAYS | HAMMER2_LOOKUP_SHARED);
 	}
 break2:
 	if (chain) {
@@ -240,11 +238,8 @@ hammer2_xop_nresolve(hammer2_xop_t *arg, void *scratch, int clindex)
 		if (hammer2_chain_dirent_test(chain, name, name_len))
 			break;
 		chain = hammer2_chain_next(&parent, chain, &key_next,
-					   key_next,
-					   lhc + HAMMER2_DIRHASH_LOMASK,
-					   &error,
-					   HAMMER2_LOOKUP_ALWAYS |
-					   HAMMER2_LOOKUP_SHARED);
+					   key_next,lhc + HAMMER2_DIRHASH_LOMASK, &error,
+					   HAMMER2_LOOKUP_ALWAYS | HAMMER2_LOOKUP_SHARED);
 	}
 
 	/* Locate the target inode for a directory entry. */
@@ -313,9 +308,8 @@ again:
 		if (hammer2_chain_dirent_test(chain, name, name_len))
 			break;
 		chain = hammer2_chain_next(&parent, chain, &key_next,
-					   key_next,
-					   lhc + HAMMER2_DIRHASH_LOMASK,
-					   &error, HAMMER2_LOOKUP_ALWAYS);
+					   key_next,lhc + HAMMER2_DIRHASH_LOMASK, &error,
+					   HAMMER2_LOOKUP_ALWAYS);
 	}
 
 	/*
@@ -537,9 +531,7 @@ hammer2_xop_nrename(hammer2_xop_t *arg, void *scratch, int clindex)
 			if (hammer2_chain_dirent_test(chain, name, name_len))
 				break;
 			chain = hammer2_chain_next(&parent, chain, &key_next,
-						   key_next,
-						   lhc + HAMMER2_DIRHASH_LOMASK,
-						   &error,
+						   key_next,lhc + HAMMER2_DIRHASH_LOMASK, &error,
 						   HAMMER2_LOOKUP_ALWAYS);
 		}
 	}
@@ -687,10 +679,7 @@ hammer2_xop_nrename(hammer2_xop_t *arg, void *scratch, int clindex)
 					error = e2;
 			}
 			tmp = hammer2_chain_next(&parent, tmp, &key_next,
-						 key_next,
-						 xop->lhc |
-						  HAMMER2_DIRHASH_LOMASK,
-						 &error,
+						 key_next,xop->lhc | HAMMER2_DIRHASH_LOMASK, &error,
 						 HAMMER2_LOOKUP_ALWAYS);
 		}
 	}
@@ -756,11 +745,8 @@ hammer2_xop_scanlhc(hammer2_xop_t *arg, void *scratch, int clindex)
 			goto done;
 		}
 		chain = hammer2_chain_next(&parent, chain, &key_next,
-					   key_next,
-					   xop->lhc + HAMMER2_DIRHASH_LOMASK,
-					   &error,
-					   HAMMER2_LOOKUP_ALWAYS |
-					   HAMMER2_LOOKUP_SHARED);
+					   key_next,xop->lhc + HAMMER2_DIRHASH_LOMASK, &error,
+					   HAMMER2_LOOKUP_ALWAYS | HAMMER2_LOOKUP_SHARED);
 	}
 done:
 	hammer2_xop_feed(&xop->head, NULL, clindex, error);
@@ -899,8 +885,7 @@ hammer2_xop_scanall(hammer2_xop_t *arg, void *scratch, int clindex)
 		if (error)
 			goto break2;
 		chain = hammer2_chain_next(&parent, chain, &key_next,
-					   key_next, xop->key_end,
-					   &error, xop->lookup_flags);
+					   key_next, xop->key_end, &error, xop->lookup_flags);
 	}
 break2:
 	if (chain) {
@@ -1239,9 +1224,7 @@ hammer2_xop_inode_unlinkall(hammer2_xop_t *arg, void *scratch, int clindex)
 		hammer2_xop_feed(&xop->head, chain, clindex, chain->error);
 		/* Depend on function to unlock the shared lock. */
 		chain = hammer2_chain_next(&parent, chain, &key_next,
-					   key_next, xop->key_end,
-					   &error,
-					   HAMMER2_LOOKUP_ALWAYS);
+					   key_next, xop->key_end, &error, HAMMER2_LOOKUP_ALWAYS);
 	}
 done:
 	if (error == 0)
@@ -1381,10 +1364,8 @@ hammer2_xop_inode_chain_sync(hammer2_xop_t *arg, void *scratch, int clindex)
 				break;
 			}
 			chain = hammer2_chain_next(&parent, chain, &key_next,
-						   key_next, HAMMER2_KEY_MAX,
-						   &error,
-						   HAMMER2_LOOKUP_NODATA |
-						   HAMMER2_LOOKUP_NODIRECT);
+						   key_next, HAMMER2_KEY_MAX, &error,
+						   HAMMER2_LOOKUP_NODATA | HAMMER2_LOOKUP_NODIRECT);
 		}
 
 		/* Reset to point at inode for following code, if necessary. */

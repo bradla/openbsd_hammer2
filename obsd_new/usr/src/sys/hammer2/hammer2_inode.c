@@ -801,7 +801,7 @@ again:
 		nip->next = NULL;
 		*xipp = nip;
 		atomic_set_int(&nip->flags, HAMMER2_INODE_ONHASH);
-		// XXX atomic_add_long(&pmp->inum_count, 1);
+
 		hammer2_spin_unex(&hash->spin);
 	}
 

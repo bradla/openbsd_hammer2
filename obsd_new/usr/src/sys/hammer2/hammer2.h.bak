@@ -86,8 +86,7 @@
 #include "hammer2_os.h"
 #include "hammer2_disk.h"
 #include "hammer2_ioctl.h"
-//#include "hammer2_rb.h"
-#include "dmsg2.h"
+#include "hammer2_rb.h"
 
 #include <sys/malloc.h>
 
@@ -230,10 +229,8 @@ struct hammer2_chain_core {
 	struct hammer2_reptrack *reptrack;
 	struct hammer2_chain_tree rbtree; /* sub-chains */
 	int		live_zero;	/* blockref array opt */
-	//u_int		live_count;	/* live (not deleted) chains in tree */
-	//u_int		chain_count;	/* live + deleted chains under core */
-	unsigned int		live_count;	
-	unsigned int		chain_count;	
+	u_int		live_count;	/* live (not deleted) chains in tree */
+	u_int		chain_count;	/* live + deleted chains under core */
 	int		generation;	/* generation number (inserts only) */
 };
 
@@ -320,7 +317,6 @@ typedef struct hammer2_inum_hash hammer2_inum_hash_t;
  * root (volume) down.  Chains represent volumes, inodes, indirect blocks,
  * data blocks, and freemap nodes and leafs.
  */
- /*
 struct hammer2_reptrack {
 	struct hammer2_reptrack	*next;
 	hammer2_chain_t		*chain;
@@ -328,22 +324,22 @@ struct hammer2_reptrack {
 };
 
 typedef struct hammer2_reptrack hammer2_reptrack_t;
-*/
+
 /*
  * Core topology for chain (embedded in chain).  Protected by a spinlock.
  */
- /*
 struct hammer2_chain_core {
 	hammer2_reptrack_t	*reptrack;
-	hammer2_chain_tree_t	rbtree;		
+	hammer2_chain_tree_t	rbtree;		/* sub-chains */
 	hammer2_spin_t		spin;
-	int			live_zero;	
-	unsigned int		live_count;	
-	unsigned int		chain_count;	
-	int			generation;	
+	int			live_zero;	/* blockref array opt */
+	unsigned int		live_count;	/* live (not deleted) chains in tree */
+	unsigned int		chain_count;	/* live + deleted chains under core */
+	int			generation;	/* generation number (inserts only) */
 };
 
-*/
+typedef struct hammer2_chain_core hammer2_chain_core_t;
+
 /*
  * Primary chain structure keeps track of the topology in-memory.
  */
@@ -371,7 +367,7 @@ struct hammer2_chain {
 
 typedef struct hammer2_chain hammer2_chain_t;
 
-int hammer2_chain_cmp(const hammer2_chain_t *, const hammer2_chain_t *);
+int hammer2_chain_cmp(hammer2_chain_t *chain1, hammer2_chain_t *chain2);
 RB_PROTOTYPE(hammer2_chain_tree, hammer2_chain, rbnode, hammer2_chain_cmp);
 /*
  * Passed to hammer2_chain_create(), causes methods to be inherited from
@@ -850,7 +846,7 @@ struct hammer2_thread {
 	struct hammer2_pfs *pmp;
 	struct hammer2_dev *hmp;
 	hammer2_xop_list_t xopq;
-	//thread_t	td;
+	thread_t	td;
 	uint32_t	flags;
 	int		clindex;	/* cluster element index */
 	int		repidx;
@@ -907,10 +903,9 @@ typedef struct hammer2_xop_desc hammer2_xop_desc_t;
 
 struct hammer2_xop_fifo {
 	TAILQ_ENTRY(hammer2_xop_head) entry;
-	//hammer2_chain_t		*array[HAMMER2_XOPFIFO];
-	hammer2_chain_t		**array;
-	//int			errors[HAMMER2_XOPFIFO];
-	int			*errors;
+	hammer2_chain_t		*array[HAMMER2_XOPFIFO];
+//	hammer2_chain_t		**array;
+	int			errors[HAMMER2_XOPFIFO];
 	int			ri;
 	int			wi;
 	int			flags;
@@ -921,7 +916,6 @@ typedef struct hammer2_xop_fifo hammer2_xop_fifo_t;
 
 #define HAMMER2_XOP_FIFO_RUN	0x0001
 #define HAMMER2_XOP_FIFO_STALL	0x0002
-
 struct hammer2_xop_head {
 	hammer2_xop_desc_t	*desc;
 	hammer2_tid_t		mtid;
@@ -930,8 +924,8 @@ struct hammer2_xop_head {
 	hammer2_inode_t		*ip3;
 	hammer2_inode_t		*ip4;
 	hammer2_io_t		*focus_dio;
-	uint32_t		run_mask;
-	uint32_t		chk_mask;
+	uint64_t		run_mask;
+	uint64_t		chk_mask;
 	int			flags;
 	int			fifo_size;
 	int			state;
@@ -942,7 +936,7 @@ struct hammer2_xop_head {
 	char			*name2;
 	size_t			name2_len;
 	void			*scratch;
-
+	hammer2_tid_t		mtid;
 	hammer2_xop_fifo_t	collect[HAMMER2_MAXCLUSTER];
 	hammer2_cluster_t	cluster;
 };
@@ -1046,11 +1040,11 @@ struct hammer2_xop_flush {
 	hammer2_xop_head_t	head;
 };
 
-/*struct hammer2_xop_strategy {
+struct hammer2_xop_strategy {
 	hammer2_xop_head_t	head;
 	hammer2_key_t		lbase;
 	struct buf		*bp;
-}; */
+};
 
 struct hammer2_xop_bmap {
 	hammer2_xop_head_t	head;
@@ -1147,7 +1141,7 @@ struct hammer2_devvp {
 
 typedef struct hammer2_devvp hammer2_devvp_t;
 
-//TAILQ_HEAD(hammer2_devvp_list, hammer2_devvp);
+TAILQ_HEAD(hammer2_devvp_list, hammer2_devvp);
 /*
  * Volume management structure.
  */
@@ -1225,23 +1219,32 @@ struct hammer2_dev {
 	hammer2_iostat_t	iostat_read;	/* read I/O stat */
 	hammer2_iostat_t	iostat_write;	/* write I/O stat */
 	kdmsg_iocom_t	iocom;		/* volume-level dmsg interface */
-	
+	hammer2_io_hash_t iohash[HAMMER2_IOHASH_SIZE];
+	int		iofree_count;
+	int		io_iterator;
+	int		freemap_relaxed;
 	int		unused01;
+	hammer2_chain_t vchain;		/* anchor chain (topology) */
+	hammer2_chain_t fchain;		/* anchor chain (freemap) */
 	hammer2_spin_t	list_spin;
-	//hammer2_off_t	heur_freemap[HAMMER2_FREEMAP_HEUR_SIZE];
-	//hammer2_dedup_t heur_dedup[HAMMER2_DEDUP_HEUR_SIZE];
-	//int		volhdrno;	/* last volhdrno written */
-	//uint32_t	hflags;		/* HMNT2 flags applicable to device */
-	//hammer2_off_t	free_reserved;	/* nominal free reserved */
-	//hammer2_off_t	total_size;	/* total size of volumes */
-	//int		nvolumes;	/* total number of volumes */
+	struct hammer2_pfs *spmp;	/* super-root pmp for transactions */
+	//struct lock	vollk;		/* lockmgr lock */
+	//struct lock	bulklk;		/* bulkfree operation lock */
+	//struct lock	bflock;		/* bulk-free manual function lock */
+	hammer2_off_t	heur_freemap[HAMMER2_FREEMAP_HEUR_SIZE];
+	hammer2_dedup_t heur_dedup[HAMMER2_DEDUP_HEUR_SIZE];
+	int		volhdrno;	/* last volhdrno written */
+	uint32_t	hflags;		/* HMNT2 flags applicable to device */
+	hammer2_off_t	free_reserved;	/* nominal free reserved */
+	hammer2_off_t	total_size;	/* total size of volumes */
+	int		nvolumes;	/* total number of volumes */
 	hammer2_thread_t bfthr;		/* bulk-free thread */
-	//char		devrepname[64];	/* for kprintf */
-	//hammer2_volume_data_t voldata;
-	//hammer2_volume_data_t volsync;	/* synchronized voldata */
+	char		devrepname[64];	/* for kprintf */
+	hammer2_volume_data_t voldata;
+	hammer2_volume_data_t volsync;	/* synchronized voldata */
 
 	hammer2_devvp_list_t devvpl;	/* list of device vnodes including *devvp */
-	//hammer2_volume_t volumes[HAMMER2_MAX_VOLUMES]; /* list of volumes */
+	hammer2_volume_t volumes[HAMMER2_MAX_VOLUMES]; /* list of volumes */
 };
 
 typedef struct hammer2_dev hammer2_dev_t;
@@ -1302,9 +1305,9 @@ struct hammer2_pfs {
 	char			*pfs_names[HAMMER2_MAXCLUSTER];
 	uint8_t			pfs_types[HAMMER2_MAXCLUSTER];
 	hammer2_blockset_t	pfs_iroot_blocksets[HAMMER2_MAXCLUSTER];
-	//hammer2_spin_t          blockset_spin;
-	//hammer2_trans_t		trans;
-	//struct lock		lock;		/* PFS lock for certain ops */
+	hammer2_spin_t          blockset_spin;
+	hammer2_trans_t		trans;
+	struct lock		lock;		/* PFS lock for certain ops */
 	struct netexport	export;		/* nfs export */
 	int			unused00;
 	int			ronly;		/* read-only mount */
@@ -1320,18 +1323,18 @@ struct hammer2_pfs {
 	uint8_t			pfs_mode;	/* operating mode PFSMODE */
 	uint8_t			unused01;
 	uint8_t			unused02;
-	//int			flags;		/* for HAMMER2_PMPF_xxx */
+	int			flags;		/* for HAMMER2_PMPF_xxx */
 	int			rdonly;		/* read-only mount */
 	int			free_ticks;	/* free_* calculations */
 	long			inmem_inodes;
-	//hammer2_off_t		free_reserved;
-	//hammer2_off_t		free_nominal;
-	//uint32_t		inmem_dirty_chains;
+	hammer2_off_t		free_reserved;
+	hammer2_off_t		free_nominal;
+	uint32_t		inmem_dirty_chains;
 	int			count_lwinprog;	/* logical write in prog */
-	//hammer2_spin_t		list_spin;
-	//struct inoq_head	syncq;		/* SYNCQ flagged inodes */
-	//struct depq_head	depq;		/* SIDEQ flagged inodes */
-	//long			sideq_count;	/* total inodes on depq */
+	hammer2_spin_t		list_spin;
+	struct inoq_head	syncq;		/* SYNCQ flagged inodes */
+	struct depq_head	depq;		/* SIDEQ flagged inodes */
+	long			sideq_count;	/* total inodes on depq */
 	hammer2_thread_t	sync_thrs[HAMMER2_MAXCLUSTER];
 	uint32_t		cluster_flags;	/* cached cluster flags */
 	int			has_xop_threads;
@@ -1341,20 +1344,19 @@ struct hammer2_pfs {
 	hammer2_off_t		free_reserved;
 	hammer2_off_t		free_nominal;
 	uint32_t		inmem_dirty_chains;
-	//hammer2_tid_t		modify_tid;	/* modify transaction id */
-	//hammer2_tid_t		inode_tid;	/* inode allocator */
-	//hammer2_inoq_head_t	syncq;		/* SYNCQ flagged inodes */
+	hammer2_tid_t		modify_tid;	/* modify transaction id */
+	hammer2_tid_t		inode_tid;	/* inode allocator */
+	hammer2_inoq_head_t	syncq;		/* SYNCQ flagged inodes */
 	hammer2_depq_head_t	depq;		/* SIDEQ flagged inodes */
 	long			sideq_count;	/* total inodes on depq */
 	/* note: inumhash not applicable to spmp */
-	//hammer2_inum_hash_t	inumhash[HAMMER2_INUMHASH_SIZE];
+	hammer2_inum_hash_t	inumhash[HAMMER2_INUMHASH_SIZE];
 	char			*fspec;		/* OpenBSD */
-	struct netexport	pm_export;	/* OpenBSD: export information */
-};
+	struct netexport	pm_export;	/* OpenBSD: export information */};
 
 typedef struct hammer2_pfs hammer2_pfs_t;
 
-//TAILQ_HEAD(hammer2_pfslist, hammer2_pfs);
+TAILQ_HEAD(hammer2_pfslist, hammer2_pfs);
 
 /*
  * pmp->flags
@@ -1562,7 +1564,7 @@ extern long hammer2_limit_dirty_chains;
 extern long hammer2_limit_dirty_inodes;
 extern long hammer2_count_modified_chains;
 extern int hammer2_limit_scan_depth;
-//extern int hammer2_limit_saved_chains;
+extern int hammer2_limit_saved_chains;
 extern int hammer2_always_compress;
 
 extern long hammer2_iod_file_read;
@@ -1635,13 +1637,13 @@ extern hammer2_xop_desc_t hammer2_bmap_desc;
 #define hammer2_icrc32(buf, size)	iscsi_crc32((buf), (size))
 #define hammer2_icrc32c(buf, size, crc)	iscsi_crc32_ext((buf), (size), (crc))
 
-//int hammer2_signal_check(time_t *timep);
+int hammer2_signal_check(time_t *timep);
 const char *hammer2_error_str(int error);
 const char *hammer2_bref_type_str(int btype);
 
 int hammer2_get_dtype(uint8_t type);
 int hammer2_get_vtype(uint8_t type);
-//uint8_t hammer2_get_obj_type(enum vtype vtype);
+uint8_t hammer2_get_obj_type(enum vtype vtype);
 void hammer2_time_to_timespec(uint64_t xtime, struct timespec *ts);
 uint64_t hammer2_timespec_to_time(const struct timespec *ts);
 uint32_t hammer2_to_unix_xid(const uuid_t *uuid);
@@ -1693,12 +1695,10 @@ int hammer2_inode_chain_des(hammer2_inode_t *);
 int hammer2_inode_chain_flush(hammer2_inode_t *, int);
 
 /* hammer2_chain.c */
-//hammer2_chain_t *hammer2_chain_alloc(hammer2_dev_t *,
-//				hammer2_pfs_t *,
-//				hammer2_blockref_t *);
+int hammer2_chain_cmp(const hammer2_chain_t *, const hammer2_chain_t *);
 void hammer2_chain_setflush(hammer2_chain_t *);
 void hammer2_chain_init(hammer2_chain_t *);
-//void hammer2_chain_ref(hammer2_chain_t *);
+void hammer2_chain_ref(hammer2_chain_t *);
 void hammer2_chain_ref_hold(hammer2_chain_t *);
 void hammer2_chain_drop(hammer2_chain_t *);
 void hammer2_chain_unhold(hammer2_chain_t *);
@@ -1717,11 +1717,11 @@ hammer2_chain_t *hammer2_chain_getparent(hammer2_chain_t *, int);
 hammer2_chain_t *hammer2_chain_lookup(hammer2_chain_t **, hammer2_key_t *,
     hammer2_key_t, hammer2_key_t, int *, int);
 //hammer2_chain_t *hammer2_chain_next(hammer2_chain_t **, hammer2_chain_t *, hammer2_key_t *, hammer2_key_t, int *, int);
-hammer2_chain_t *hammer2_chain_next(hammer2_chain_t **,
-				hammer2_chain_t *,
-				hammer2_key_t *,
-				hammer2_key_t , hammer2_key_t ,
-				int *, int );
+hammer2_chain_t *hammer2_chain_next(hammer2_chain_t **parentp,
+				hammer2_chain_t *chain,
+				hammer2_key_t *key_nextp,
+				hammer2_key_t key_beg, hammer2_key_t key_end,
+				int *errorp, int flags);
 int hammer2_chain_scan(hammer2_chain_t *, hammer2_chain_t **,
     hammer2_blockref_t *, int *, int);
 int hammer2_chain_create(hammer2_chain_t **, hammer2_chain_t **,
@@ -1741,6 +1741,9 @@ hammer2_chain_t *hammer2_chain_bulksnap(hammer2_dev_t *);
 void hammer2_chain_bulkdrop(hammer2_chain_t *);
 int hammer2_chain_dirent_test(const hammer2_chain_t *, const char *, size_t);
 void hammer2_dump_chain(hammer2_chain_t *, int, int, int, char);
+
+RB_PROTOTYPE(hammer2_chain_tree, hammer2_chain, rbnode, hammer2_chain_cmp);
+RB_PROTOTYPE_SCAN(hammer2_chain_tree, hammer2_chain, rbnode);
 
 /* hammer2_flush.c */
 void hammer2_trans_manage_init(hammer2_pfs_t *);
@@ -1836,7 +1839,6 @@ char *hammer2_io_data(hammer2_io_t *, hammer2_off_t);
 int hammer2_io_new(hammer2_dev_t *, int, hammer2_off_t, int, hammer2_io_t **);
 int hammer2_io_newnz(hammer2_dev_t *, int, hammer2_off_t, int, hammer2_io_t **);
 int hammer2_io_bread(hammer2_dev_t *, int, hammer2_off_t, int, hammer2_io_t **);
-int _hammer2_io_bread(hammer2_dev_t *, int , hammer2_off_t , int, hammer2_io_t **);
 hammer2_io_t *hammer2_io_getquick(hammer2_dev_t *, off_t, int);
 void hammer2_io_bawrite(hammer2_io_t **);
 void hammer2_io_bdwrite(hammer2_io_t **);
@@ -1849,6 +1851,61 @@ void hammer2_io_dedup_set(hammer2_dev_t *, hammer2_blockref_t *);
 void hammer2_io_dedup_delete(hammer2_dev_t *, uint8_t, hammer2_off_t,
     unsigned int);
 void hammer2_io_dedup_assert(hammer2_dev_t *, hammer2_off_t, unsigned int);
+
+#ifndef HAMMER2_IO_DEBUG
+
+#define hammer2_io_getblk(hmp, btype, lbase, lsize, op)			\
+	_hammer2_io_getblk((hmp), (btype), (lbase), (lsize), (op))
+#define hammer2_io_getquick(hmp, lbase, lsize)				\
+	_hammer2_io_getquick((hmp), (lbase), (lsize))
+#define hammer2_io_putblk(diop)						\
+	_hammer2_io_putblk(diop)
+#define hammer2_io_bwrite(diop)						\
+	_hammer2_io_bwrite((diop))
+#define hammer2_io_bawrite(diop)					\
+	_hammer2_io_bawrite((diop))
+#define hammer2_io_bdwrite(diop)					\
+	_hammer2_io_bdwrite((diop))
+#define hammer2_io_brelse(diop)						\
+	_hammer2_io_brelse((diop))
+#define hammer2_io_bqrelse(diop)					\
+	_hammer2_io_bqrelse((diop))
+#define hammer2_io_ref(dio)						\
+	_hammer2_io_ref((dio))
+
+#define hammer2_io_bread(hmp, btype, lbase, lsize, diop)		\
+	_hammer2_io_bread((hmp), (btype), (lbase), (lsize), (diop))
+
+#else
+
+#define hammer2_io_getblk(hmp, btype, lbase, lsize, op)			\
+	_hammer2_io_getblk((hmp), (btype), (lbase), (lsize), (op),	\
+	__FILE__, __LINE__)
+
+#define hammer2_io_getquick(hmp, lbase, lsize)				\
+	_hammer2_io_getquick((hmp), (lbase), (lsize), __FILE__, __LINE__)
+
+#define hammer2_io_putblk(diop)						\
+	_hammer2_io_putblk(diop, __FILE__, __LINE__)
+
+#define hammer2_io_bwrite(diop)						\
+	_hammer2_io_bwrite((diop), __FILE__, __LINE__)
+#define hammer2_io_bawrite(diop)					\
+	_hammer2_io_bawrite((diop), __FILE__, __LINE__)
+#define hammer2_io_bdwrite(diop)					\
+	_hammer2_io_bdwrite((diop), __FILE__, __LINE__)
+#define hammer2_io_brelse(diop)						\
+	_hammer2_io_brelse((diop), __FILE__, __LINE__)
+#define hammer2_io_bqrelse(diop)					\
+	_hammer2_io_bqrelse((diop), __FILE__, __LINE__)
+#define hammer2_io_ref(dio)						\
+	_hammer2_io_ref((dio), __FILE__, __LINE__)
+
+#define hammer2_io_bread(hmp, btype, lbase, lsize, diop)		\
+	_hammer2_io_bread((hmp), (btype), (lbase), (lsize), (diop),	\
+			  __FILE__, __LINE__)
+
+#endif
 
 /* hammer2_admin.c */
 void *hammer2_xop_alloc(hammer2_inode_t *, int);
@@ -1941,7 +1998,8 @@ void hammer2_rmsg_inode_flush(hammer2_xop_t *xop, void *scratch, int clindex);
 void hammer2_rmsg_strategy_read(hammer2_xop_t *xop, void *scratch, int clindex);
 void hammer2_rmsg_strategy_write(hammer2_xop_t *xop, void *scratch,
 				int clindex);
-				
+
+
 /* hammer2_bulkfree.c */
 void hammer2_bulkfree_init(hammer2_dev_t *);
 void hammer2_bulkfree_uninit(hammer2_dev_t *);
@@ -1989,8 +2047,8 @@ hammer2_xop_gdata(hammer2_xop_head_t *xop)
 
 	if (focus->dio) {
 		hammer2_mtx_sh(&focus->diolk);
-		//if ((xop->focus_dio = focus->dio) != NULL)
-			// atomic_add_32(&xop->focus_dio->refs, 1); xxx
+		if ((xop->focus_dio = focus->dio) != NULL)
+			atomic_add_32(&xop->focus_dio->refs, 1);
 		data = focus->data;
 		hammer2_mtx_unlock(&focus->diolk);
 	} else {

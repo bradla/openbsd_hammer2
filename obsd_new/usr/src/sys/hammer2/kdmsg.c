@@ -6,9 +6,9 @@
 
 //static int kdmsg_msg_receive_handling(kdmsg_msg_t *msg);
 //static int kdmsg_state_msgrx(kdmsg_msg_t *msg);
-static int kdmsg_state_msgtx(kdmsg_msg_t *msg);
+//static int kdmsg_state_msgtx(kdmsg_msg_t *msg);
 //static void kdmsg_state_cleanuprx(kdmsg_msg_t *msg);
-static void kdmsg_state_cleanuptx(kdmsg_msg_t *msg);
+//static void kdmsg_state_cleanuptx(kdmsg_msg_t *msg);
 //static void kdmsg_state_abort(kdmsg_state_t *state);
 static void kdmsg_state_free(kdmsg_state_t *state);
 
@@ -219,272 +219,25 @@ kdmsg_iocom_uninit(kdmsg_iocom_t *iocom)
  *
  * Caller must hold pmp->iocom.msglk
  */
+ /*
 void
 kdmsg_drain_msgq(kdmsg_iocom_t *iocom)
 {
 	kdmsg_msg_t *msg;
 
-	/*
-	 * Clean out our pending transmit queue, executing the
-	 * appropriate state adjustments.  If this tries to open
-	 * any new outgoing transactions we have to loop up and
-	 * clean them out.
-	 */
+
 	while ((msg = TAILQ_FIRST(&iocom->msgq)) != NULL) {
 		TAILQ_REMOVE(&iocom->msgq, msg, qentry);
-		//lockmgr(&iocom->msglk, LK_RELEASE, NULL);
+
 		if (kdmsg_state_msgtx(msg))
 			kdmsg_msg_free(msg);
 		else
 			kdmsg_state_cleanuptx(msg);
-		//lockmgr(&iocom->msglk, LK_EXCLUSIVE, NULL);
 	}
 }
-
-/*
- * Process state tracking for a message prior to transmission.
- *
- * Called with msglk held and the msg dequeued.  Returns non-zero if
- * the message is bad and should be deleted by the caller.
- *
- * One-off messages are usually with dummy state and msg->state may be NULL
- * in this situation.
- *
- * New transactions (when CREATE is set) will insert the state.
- *
- * May request that caller discard the message by setting *discardp to 1.
- * A NULL state may be returned in this case.
- */
-static
-int
-kdmsg_state_msgtx(kdmsg_msg_t *msg)
-{
-	kdmsg_iocom_t *iocom = msg->state->iocom;
-	kdmsg_state_t *state;
-	int error;
-
-	/*
-	 * Make sure a state structure is ready to go in case we need a new
-	 * one.  This is the only routine which uses freewr_state so no
-	 * races are possible.
-	 */
-	if ((state = iocom->freewr_state) == NULL) {
-		state = malloc(sizeof(*state), (size_t)iocom->mmsg, M_WAITOK | M_ZERO);
-		state->flags = KDMSG_STATE_DYNAMIC;
-		state->iocom = iocom;
-		iocom->freewr_state = state;
-	}
-
-	/*
-	 * Lock RB tree.  If persistent state is present it will have already
-	 * been assigned to msg.
-	 */
-	//lockmgr(&iocom->msglk, LK_EXCLUSIVE, NULL);
-	state = msg->state;
-
-	/*
-	 * Short-cut one-off or mid-stream messages (state may be NULL).
-	 */
-	if ((msg->any.head.cmd & (DMSGF_CREATE | DMSGF_DELETE |
-				  DMSGF_ABORT)) == 0) {
-		//lockmgr(&iocom->msglk, LK_RELEASE, NULL);
-		return(0);
-	}
+*/
 
 
-	/*
-	 * Switch on CREATE, DELETE, REPLY, and also handle ABORT from
-	 * inside the case statements.
-	 */
-	switch(msg->any.head.cmd & (DMSGF_CREATE | DMSGF_DELETE |
-				    DMSGF_REPLY)) {
-	case DMSGF_CREATE:
-	case DMSGF_CREATE | DMSGF_DELETE:
-		/*
-		 * Insert the new persistent message state and mark
-		 * half-closed if DELETE is set.  Since this is a new
-		 * message it isn't possible to transition into the fully
-		 * closed state here.
-		 *
-		 * XXX state must be assigned and inserted by
-		 *     kdmsg_msg_write().  txcmd is assigned by us
-		 *     on-transmit.
-		 */
-		// XX KKASSERT(state != NULL);
-		state->icmd = msg->any.head.cmd & DMSGF_BASECMDMASK;
-		state->txcmd = msg->any.head.cmd & ~DMSGF_DELETE;
-		state->rxcmd = DMSGF_REPLY;
-		error = 0;
-		break;
-	case DMSGF_DELETE:
-		/*
-		 * Sent ABORT+DELETE in case where msgid has already
-		 * been fully closed, ignore the message.
-		 */
-		if (state == &iocom->state0) {
-			if (msg->any.head.cmd & DMSGF_ABORT) {
-				error = EALREADY;
-			} else {
-				printf("kdmsg_state_msgtx: no state match "
-					"for DELETE cmd=%08x msgid=%016x\n",
-					msg->any.head.cmd,
-					(unsigned int)msg->any.head.msgid);
-				error = EINVAL;
-			}
-			break;
-		}
-
-		/*
-		 * Sent ABORT+DELETE in case where msgid has
-		 * already been reused for an unrelated message,
-		 * ignore the message.
-		 */
-		if ((state->txcmd & DMSGF_CREATE) == 0) {
-			if (msg->any.head.cmd & DMSGF_ABORT) {
-				error = EALREADY;
-			} else {
-				printf("kdmsg_state_msgtx: state reused "
-					"for DELETE\n");
-				error = EINVAL;
-			}
-			break;
-		}
-		error = 0;
-		break;
-	default:
-		/*
-		 * Check for mid-stream ABORT command sent
-		 */
-		if (msg->any.head.cmd & DMSGF_ABORT) {
-			if (state == &state->iocom->state0 ||
-			    (state->txcmd & DMSGF_CREATE) == 0) {
-				error = EALREADY;
-				break;
-			}
-		}
-		error = 0;
-		break;
-	case DMSGF_REPLY | DMSGF_CREATE:
-	case DMSGF_REPLY | DMSGF_CREATE | DMSGF_DELETE:
-		/*
-		 * When transmitting a reply with CREATE set the original
-		 * persistent state message should already exist.
-		 */
-		if (state == &state->iocom->state0) {
-			printf("kdmsg_state_msgtx: no state match "
-				"for REPLY | CREATE\n");
-			error = EINVAL;
-			break;
-		}
-		state->txcmd = msg->any.head.cmd & ~DMSGF_DELETE;
-		error = 0;
-		break;
-	case DMSGF_REPLY | DMSGF_DELETE:
-		/*
-		 * When transmitting a reply with DELETE set the original
-		 * persistent state message should already exist.
-		 *
-		 * This is very similar to the REPLY|CREATE|* case except
-		 * txcmd is already stored, so we just add the DELETE flag.
-		 *
-		 * Sent REPLY+ABORT+DELETE in case where msgid has
-		 * already been fully closed, ignore the message.
-		 */
-		if (state == &state->iocom->state0) {
-			if (msg->any.head.cmd & DMSGF_ABORT) {
-				error = EALREADY;
-			} else {
-				printf("kdmsg_state_msgtx: no state match "
-					"for REPLY | DELETE\n");
-				error = EINVAL;
-			}
-			break;
-		}
-
-		/*
-		 * Sent REPLY+ABORT+DELETE in case where msgid has already
-		 * been reused for an unrelated message, ignore the message.
-		 */
-		if ((state->txcmd & DMSGF_CREATE) == 0) {
-			if (msg->any.head.cmd & DMSGF_ABORT) {
-				error = EALREADY;
-			} else {
-				printf("kdmsg_state_msgtx: state reused "
-					"for REPLY | DELETE\n");
-				error = EINVAL;
-			}
-			break;
-		}
-		error = 0;
-		break;
-	case DMSGF_REPLY:
-		/*
-		 * Check for mid-stream ABORT reply sent.
-		 *
-		 * One-off REPLY messages are allowed for e.g. status updates.
-		 */
-		if (msg->any.head.cmd & DMSGF_ABORT) {
-			if (state == &state->iocom->state0 ||
-			    (state->txcmd & DMSGF_CREATE) == 0) {
-				error = EALREADY;
-				break;
-			}
-		}
-		error = 0;
-		break;
-	}
-	//lockmgr(&iocom->msglk, LK_RELEASE, NULL);
-	return (error);
-}
-
-static
-void
-kdmsg_state_cleanuptx(kdmsg_msg_t *msg)
-{
-	kdmsg_iocom_t *iocom = msg->state->iocom;
-	kdmsg_state_t *state;
-	kdmsg_state_t *pstate;
-
-	if ((state = msg->state) == NULL) {
-		kdmsg_msg_free(msg);
-	} else if (msg->any.head.cmd & DMSGF_DELETE) {
-		//lockmgr(&iocom->msglk, LK_EXCLUSIVE, NULL);
-		// XX KKASSERT((state->txcmd & DMSGF_DELETE) == 0);
-		state->txcmd |= DMSGF_DELETE;
-		if (state->rxcmd & DMSGF_DELETE) {
-			// XX KKASSERT(state->flags & KDMSG_STATE_INSERTED);
-			if (state->txcmd & DMSGF_REPLY) {
-				// XX KKASSERT(msg->any.head.cmd &
-				// XX 	 DMSGF_REPLY);
-				RB_REMOVE(kdmsg_state_tree,
-					  &iocom->staterd_tree, state);
-			} else {
-				// XX KKASSERT((msg->any.head.cmd &
-				// XX 	  DMSGF_REPLY) == 0);
-				RB_REMOVE(kdmsg_state_tree,
-					  &iocom->statewr_tree, state);
-			}
-			pstate = state->parent;
-			TAILQ_REMOVE(&pstate->subq, state, entry);
-			if (pstate != &pstate->iocom->state0 &&
-			    TAILQ_EMPTY(&pstate->subq) &&
-			    (pstate->flags & KDMSG_STATE_INSERTED) == 0) {
-				kdmsg_state_free(pstate);
-			}
-			state->flags &= ~KDMSG_STATE_INSERTED;
-			state->parent = NULL;
-			kdmsg_msg_free(msg);
-			if (TAILQ_EMPTY(&state->subq))
-				kdmsg_state_free(state);
-			//lockmgr(&iocom->msglk, LK_RELEASE, NULL);
-		} else {
-			kdmsg_msg_free(msg);
-			//lockmgr(&iocom->msglk, LK_RELEASE, NULL);
-		}
-	} else {
-		kdmsg_msg_free(msg);
-	}
-}
 
 static
 void
@@ -528,8 +281,8 @@ kdmsg_msg_alloc(kdmsg_state_t *state, uint32_t cmd,
 		/*msg->any.head.msgid = state->msgid;XXX*/
 
 		//lockmgr(&iocom->msglk, LK_EXCLUSIVE, NULL);
-		if (RB_INSERT(kdmsg_state_tree, &iocom->statewr_tree, state))
-			panic("duplicate msgid allocated");
+		//if (RB_INSERT(kdmsg_state_tree, &iocom->statewr_tree, state)) xxx 
+			//panic("duplicate msgid allocated");
 		TAILQ_INSERT_TAIL(&pstate->subq, state, entry);
 		state->flags |= KDMSG_STATE_INSERTED;
 		//lockmgr(&iocom->msglk, LK_RELEASE, NULL);

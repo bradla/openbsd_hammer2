@@ -40,9 +40,9 @@
 
 #include <sys/sysctl.h>
 #include <sys/specdev.h>
-#include <sys/param.h>
-#include <sys/lock.h>
-#include <sys/vnode.h>
+
+
+
 
 static int hammer2_unmount(struct mount *, int, struct proc *);
 static int hammer2_recovery(hammer2_dev_t *);
@@ -54,7 +54,6 @@ static void hammer2_update_pmps(hammer2_dev_t *);
 static void hammer2_mount_helper(struct mount *, hammer2_pfs_t *);
 static void hammer2_unmount_helper(struct mount *, hammer2_pfs_t *,
     hammer2_dev_t *);
-//static int hammer2_vfs_modifying(struct mount *);
 
 struct pool hammer2_pool_inode;
 struct pool hammer2_pool_xops;
@@ -72,6 +71,7 @@ hammer2_lk_t hammer2_mntlk;
 
 /* sysctl */
 static int hammer2_supported_version = HAMMER2_VOL_VERSION_DEFAULT;
+int hammer2_debug;
 int hammer2_dedup_enable = 1;
 int hammer2_count_inode_allocated;
 int hammer2_count_chain_allocated;
@@ -90,7 +90,6 @@ int malloc_leak_m_hammer2_wbuf;
 int malloc_leak_m_hammer2_lz4;
 int malloc_leak_m_temp;
 
-//long hammer2_limit_saved_chains;
 long hammer2_limit_dirty_chains;
 long hammer2_limit_dirty_inodes;
 long hammer2_iod_file_read;
@@ -930,9 +929,7 @@ next_hmp:
 		    strcmp(label, (char *)chain->data->ipdata.filename) == 0)
 			break;
 		chain = hammer2_chain_next(&parent, chain, &key_next,
-					    key_next,
-					    lhc + HAMMER2_DIRHASH_LOMASK,
-					    &error, 0);
+					    key_next,lhc + HAMMER2_DIRHASH_LOMASK,&error, 0);
 	}
 	if (parent) {
 		hammer2_chain_unlock(parent);
@@ -1091,8 +1088,7 @@ hammer2_update_pmps(hammer2_dev_t *hmp)
 			hammer2_pfsalloc(chain, ripdata, force_local);
 		}
 		chain = hammer2_chain_next(&parent, chain, &key_next,
-					   key_next, HAMMER2_KEY_MAX,
-					   &error, 0);
+					   key_next, HAMMER2_KEY_MAX, &error, 0);
 	}
 	if (parent) {
 		hammer2_chain_unlock(parent);
@@ -1234,7 +1230,7 @@ again:
 		return;
 	}
 
-		/*
+	/*
 	 * Decomission the network before we start messing with the
 	 * device and PFS.
 	 */
@@ -1586,8 +1582,7 @@ hammer2_fixup_pfses(hammer2_dev_t *hmp)
 			hammer2_trans_done(hmp->spmp, 0);
 		}
 		chain = hammer2_chain_next(&parent, chain, &key_next,
-					   key_next, HAMMER2_KEY_MAX,
-					   &error, 0);
+					   key_next, HAMMER2_KEY_MAX, &error, 0);
 	}
 
 	if (parent) {
@@ -2084,25 +2079,6 @@ hammer2_pfs_memory_inc(hammer2_pfs_t *pmp)
 		atomic_add_int(&pmp->inmem_dirty_chains, 1);
 	}
 }
-
-/*
- * Volume header data locks
- 
-void
-hammer2_voldata_lock(hammer2_dev_t *hmp)
-{
-	lockmgr(&hmp->vollk, LK_EXCLUSIVE);
-
-    hammer2_lk_ex(&hmp->vollk);
-}
-
-void
-hammer2_voldata_unlock(hammer2_dev_t *hmp)
-{
-	ckmgr(&hmp->vollk, LK_RELEASE);
-
-    hammer2_lk_unlock(&hmp->vollk);
-}*/
 
 static int
 hammer2_vget(struct mount *mp, ino_t ino, struct vnode **vpp)

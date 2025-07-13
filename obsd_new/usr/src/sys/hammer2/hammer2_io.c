@@ -407,6 +407,14 @@ hammer2_io_bread(hammer2_dev_t *hmp, int btype, hammer2_off_t lbase, int lsize,
 	return ((*diop)->error);
 }
 
+int
+_hammer2_io_bread(hammer2_dev_t *hmp, int btype, hammer2_off_t lbase, int lsize,
+    hammer2_io_t **diop)
+{
+	*diop = hammer2_io_getblk(hmp, btype, lbase, lsize, HAMMER2_DOP_READ);
+	return ((*diop)->error);
+}
+
 hammer2_io_t *
 hammer2_io_getquick(hammer2_dev_t *hmp, off_t lbase, int lsize)
 {
@@ -442,14 +450,48 @@ hammer2_io_setdirty(hammer2_io_t *dio)
 	atomic_set_32(&dio->refs, HAMMER2_DIO_DIRTY);
 }
 
+/*
+ * This routine is called when a MODIFIED chain is being DESTROYED,
+ * in an attempt to allow the related buffer cache buffer to be
+ * invalidated and discarded instead of flushing it to disk.
+ *
+ * At the moment this case is only really useful for file meta-data.
+ * File data is already handled via the logical buffer cache associated
+ * with the vnode, and will be discarded if it was never flushed to disk.
+ * File meta-data may include inodes, directory entries, and indirect blocks.
+ *
+ * XXX
+ * However, our DIO buffers are PBUFSIZE'd (64KB), and the area being
+ * invalidated might be smaller.  Most of the meta-data structures above
+ * are in the 'smaller' category.  For now, don't try to invalidate the
+ * data areas.
+ */
 void
-hammer2_io_brelse(hammer2_io_t **diop)
+hammer2_io_inval(hammer2_io_t *dio, hammer2_off_t data_off, u_int bytes)
+{
+	/* NOP */
+}
+
+void
+_hammer2_io_brelse(hammer2_io_t **diop HAMMER2_IO_DEBUG_ARGS)
+{
+	_hammer2_io_putblk(diop HAMMER2_IO_DEBUG_CALL);
+}
+
+void
+_hammer2_io_bqrelse(hammer2_io_t **diop HAMMER2_IO_DEBUG_ARGS)
+{
+	_hammer2_io_putblk(diop HAMMER2_IO_DEBUG_CALL);
+}
+
+void
+hammer2_io_brelse(hammer2_io_t **diop  HAMMER2_IO_DEBUG_ARGS) 
 {
 	hammer2_io_putblk(diop);
 }
 
 void
-hammer2_io_bqrelse(hammer2_io_t **diop)
+hammer2_io_bqrelse(hammer2_io_t **diop  HAMMER2_IO_DEBUG_ARGS)
 {
 	hammer2_io_putblk(diop);
 }

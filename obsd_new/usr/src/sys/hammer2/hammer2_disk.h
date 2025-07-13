@@ -1221,11 +1221,6 @@ struct hammer2_volume_data {
 	hammer2_off_t volu_loff[HAMMER2_MAX_VOLUMES];
 
 	/*
-	 * sector #8-71	- 32768 bytes for unused 256 volconf array.
-	 */
-	char		reserved_volconf[0x8000]; /* 1000-8FFF reserved */
-     
-	/*
 	 * sector #8-71	- 32768 bytes
 	 *
 	 * Contains the configuration for up to 256 copyinfo targets.  These
@@ -1292,19 +1287,5 @@ union hammer2_media_data {
 } __packed;
 
 typedef union hammer2_media_data hammer2_media_data_t;
-
-_Static_assert((1 << HAMMER2_SET_RADIX) == HAMMER2_SET_COUNT,
-    "hammer2 direct radix is incorrect");
-_Static_assert((1 << HAMMER2_PBUFRADIX) == HAMMER2_PBUFSIZE,
-    "HAMMER2_PBUFRADIX and HAMMER2_PBUFSIZE are inconsistent");
-_Static_assert((1 << HAMMER2_RADIX_MIN) == HAMMER2_ALLOC_MIN,
-    "HAMMER2_RADIX_MIN and HAMMER2_ALLOC_MIN are inconsistent");
-
-_Static_assert(sizeof(struct hammer2_blockref) == HAMMER2_BLOCKREF_BYTES,
-    "struct hammer2_blockref size != HAMMER2_BLOCKREF_BYTES");
-_Static_assert(sizeof(struct hammer2_inode_data) == HAMMER2_INODE_BYTES,
-    "struct hammer2_inode_data size != HAMMER2_INODE_BYTES");
-//_Static_assert(sizeof(struct hammer2_volume_data) == HAMMER2_VOLUME_BYTES,
-//    "struct hammer2_volume_data size != HAMMER2_VOLUME_BYTES");
 
 #endif /* !_FS_HAMMER2_DISK_H_ */

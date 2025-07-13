@@ -41,11 +41,11 @@
 #include <sys/param.h>
 #include <sys/ioccom.h>
 #include <sys/syslimits.h>
-
 #include "hammer2_disk.h"
+#include "hammer2_mount.h"
 
 /*
- * Ioctl to get version.
+ * get_version
  */
 struct hammer2_ioc_version {
 	int			version;
@@ -78,7 +78,7 @@ struct hammer2_ioc_remote {
 typedef struct hammer2_ioc_remote hammer2_ioc_remote_t;
 
 /*
- * Ioctls to manage PFSs.
+ * Ioctls to manage PFSs
  *
  * PFSs can be clustered by matching their pfs_clid, and the PFSs making up
  * a cluster can be uniquely identified by combining the vol_id with
@@ -87,8 +87,8 @@ typedef struct hammer2_ioc_remote hammer2_ioc_remote_t;
 struct hammer2_ioc_pfs {
 	hammer2_key_t		name_key;	/* super-root directory scan */
 	hammer2_key_t		name_next;	/* (GET only) */
-	uint8_t			pfs_type;
-	uint8_t			pfs_subtype;
+	uint8_t			pfs_type;	/* e.g. MASTER, SLAVE, ... */
+	uint8_t			pfs_subtype;	/* e.g. SNAPSHOT */
 	uint8_t			reserved0012;
 	uint8_t			reserved0013;
 	uint32_t		pfs_flags;
@@ -103,7 +103,7 @@ typedef struct hammer2_ioc_pfs hammer2_ioc_pfs_t;
 #define HAMMER2_PFSFLAGS_NOSYNC		0x00000001
 
 /*
- * Ioctl to manage inodes.
+ * Ioctls to manage inodes
  */
 struct hammer2_ioc_inode {
 	uint32_t		flags;
@@ -122,23 +122,23 @@ typedef struct hammer2_ioc_inode hammer2_ioc_inode_t;
 #define HAMMER2IOC_INODE_FLAG_COMP	0x00000010
 
 /*
- * Ioctl for bulkfree scan.
+ * Ioctl for bulkfree scan
  */
 struct hammer2_ioc_bulkfree {
 	hammer2_off_t		sbase;	/* starting storage offset */
 	hammer2_off_t		sstop;	/* (set on return) */
 	size_t			size;	/* swapable kernel memory to use */
-	hammer2_off_t		count_allocated;	/* alloc fixups this run */
-	hammer2_off_t		count_freed;		/* bytes freed this run */
-	hammer2_off_t		total_fragmented;	/* merged result */
-	hammer2_off_t		total_allocated;	/* merged result */
-	hammer2_off_t		total_scanned;		/* bytes of storage */
+	hammer2_off_t		count_allocated;  /* alloc fixups this run */
+	hammer2_off_t		count_freed;	  /* bytes freed this run */
+	hammer2_off_t		total_fragmented; /* merged result */
+	hammer2_off_t		total_allocated;  /* merged result */
+	hammer2_off_t		total_scanned;	  /* bytes of storage */
 };
 
 typedef struct hammer2_ioc_bulkfree hammer2_ioc_bulkfree_t;
 
 /*
- * Unconditionally delete a hammer2 directory entry or inode number.
+ * Unconditionally delete a hammer2 directory entry or inode number
  */
 struct hammer2_ioc_destroy {
 	enum { HAMMER2_DELETE_NOP,
@@ -165,7 +165,7 @@ struct hammer2_ioc_growfs {
 typedef struct hammer2_ioc_growfs hammer2_ioc_growfs_t;
 
 /*
- * Ioctl to manage volumes.
+ * Ioctls to manage volumes
  */
 struct hammer2_ioc_volume {
 	char			path[MAXPATHLEN];
@@ -186,32 +186,9 @@ struct hammer2_ioc_volume_list {
 typedef struct hammer2_ioc_volume_list hammer2_ioc_volume_list_t;
 
 /*
- * Ioctl to manage volumes (version 2).
+ * Ioctl list
  */
- 
-struct hammer2_ioc_volume2 {
-	char			path[64];
-	int			id;
-	hammer2_off_t		offset;
-	hammer2_off_t		size;
-};
-
-typedef struct hammer2_ioc_volume2 hammer2_ioc_volume2_t;
-
-struct hammer2_ioc_volume_list2 {
-	hammer2_ioc_volume2_t	volumes[HAMMER2_MAX_VOLUMES];
-	int			nvolumes;
-	int			version;
-	char			pfs_name[HAMMER2_INODE_MAXNAME];
-};
-
-typedef struct hammer2_ioc_volume_list2 hammer2_ioc_volume_list2_t;
-
-/*
- * Ioctl list.
- */
-#define HAMMER2IOC_VERSION_GET		_IOWR('h', 64, struct hammer2_ioc_version)
-
+#define HAMMER2IOC_VERSION_GET	_IOWR('h', 64, struct hammer2_ioc_version)
 #define HAMMER2IOC_RECLUSTER	_IOWR('h', 65, struct hammer2_ioc_recluster)
 
 #define HAMMER2IOC_REMOTE_SCAN	_IOWR('h', 68, struct hammer2_ioc_remote)
@@ -222,19 +199,26 @@ typedef struct hammer2_ioc_volume_list2 hammer2_ioc_volume_list2_t;
 #define HAMMER2IOC_SOCKET_GET	_IOWR('h', 76, struct hammer2_ioc_remote)
 #define HAMMER2IOC_SOCKET_SET	_IOWR('h', 77, struct hammer2_ioc_remote)
 
-#define HAMMER2IOC_PFS_GET		_IOWR('h', 80, struct hammer2_ioc_pfs)
-#define HAMMER2IOC_PFS_CREATE		_IOWR('h', 81, struct hammer2_ioc_pfs)
-#define HAMMER2IOC_PFS_DELETE		_IOWR('h', 82, struct hammer2_ioc_pfs)
-#define HAMMER2IOC_PFS_LOOKUP		_IOWR('h', 83, struct hammer2_ioc_pfs)
-#define HAMMER2IOC_PFS_SNAPSHOT		_IOWR('h', 84, struct hammer2_ioc_pfs)
-#define HAMMER2IOC_INODE_GET		_IOWR('h', 86, struct hammer2_ioc_inode)
-#define HAMMER2IOC_INODE_SET		_IOWR('h', 87, struct hammer2_ioc_inode)
-#define HAMMER2IOC_DEBUG_DUMP		_IOWR('h', 91, int)
-#define HAMMER2IOC_BULKFREE_SCAN	_IOWR('h', 92, struct hammer2_ioc_bulkfree)
-#define HAMMER2IOC_DESTROY		_IOWR('h', 94, struct hammer2_ioc_destroy)
-#define HAMMER2IOC_EMERG_MODE		_IOWR('h', 95, int)
-#define HAMMER2IOC_GROWFS		_IOWR('h', 96, struct hammer2_ioc_growfs)
-#define HAMMER2IOC_VOLUME_LIST		_IOWR('h', 97, struct hammer2_ioc_volume_list)
-#define HAMMER2IOC_VOLUME_LIST2		_IOWR('h', 197, struct hammer2_ioc_volume_list2)
+#define HAMMER2IOC_PFS_GET	_IOWR('h', 80, struct hammer2_ioc_pfs)
+#define HAMMER2IOC_PFS_CREATE	_IOWR('h', 81, struct hammer2_ioc_pfs)
+#define HAMMER2IOC_PFS_DELETE	_IOWR('h', 82, struct hammer2_ioc_pfs)
+#define HAMMER2IOC_PFS_LOOKUP	_IOWR('h', 83, struct hammer2_ioc_pfs)
+#define HAMMER2IOC_PFS_SNAPSHOT	_IOWR('h', 84, struct hammer2_ioc_pfs)
 
+#define HAMMER2IOC_INODE_GET	_IOWR('h', 86, struct hammer2_ioc_inode)
+#define HAMMER2IOC_INODE_SET	_IOWR('h', 87, struct hammer2_ioc_inode)
+
+/*
+ * 88, 89, 90 - old copmression ioctls, now reserved
+ *
+ * 94 - note that this deletes a directory entry or inode number
+ *	unconditionally.
+ */
+#define HAMMER2IOC_DEBUG_DUMP	_IOWR('h', 91, int)
+#define HAMMER2IOC_BULKFREE_SCAN _IOWR('h', 92, struct hammer2_ioc_bulkfree)
+#define HAMMER2IOC_BULKFREE_ASYNC _IOWR('h', 93, struct hammer2_ioc_bulkfree)
+#define HAMMER2IOC_DESTROY	_IOWR('h', 94, struct hammer2_ioc_destroy)
+#define HAMMER2IOC_EMERG_MODE	_IOWR('h', 95, int)
+#define HAMMER2IOC_GROWFS	_IOWR('h', 96, struct hammer2_ioc_growfs)
+#define HAMMER2IOC_VOLUME_LIST	_IOWR('h', 97, struct hammer2_ioc_volume_list)
 #endif /* !_FS_HAMMER2_IOCTL_H_ */

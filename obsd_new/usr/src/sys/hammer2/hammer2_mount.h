@@ -49,7 +49,7 @@
  * This structure is passed from userland to the kernel during the mount
  * system call.
  *
- * The fspec is formatted as '/dev/ad0s1a@LABEL', where the label is
+ * The volume name is formatted as '/dev/ad0s1a@LABEL', where the label is
  * the mount point under the super-root.
  *
  * struct hammer2_mount_info definition must be same as struct hammer2_args,
@@ -57,14 +57,18 @@
  * offset 0 followed by struct export_args.
  */
 struct hammer2_mount_info {
-	char		*fspec;
+	const char	*volume;
 	struct export_args export_info;	/* network export information */
 	int		hflags;		/* extended hammer2 mount flags */
+	int		cluster_fd;	/* cluster management pipe/socket */
+	char		reserved1[112];
 };
 
+#define HMNT2_UNUSED01		0x00000001
 #define HMNT2_LOCAL		0x00000002
-#define HMNT2_EMERG		0x00000004
+#define HMNT2_EMERG		0x00000004	/* emergency mode */
 
+#define HMNT2_USERFLAGS		(HMNT2_LOCAL)
 #define HMNT2_DEVFLAGS		(HMNT2_LOCAL)
 
 /* for sbin/sysctl/sysctl.c */
